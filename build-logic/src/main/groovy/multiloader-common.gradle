@@ -20,6 +20,8 @@ tasks.withType(Jar).configureEach {
 }
 
 jar {
+    // scoreline-<mod version>+<Minecraft version>-<module>.jar, for example scoreline-0.1.0+26.3-neoforge.jar
+    archiveFileName = "${mod_id}-${version}+${minecraft_version}-${project.name}.jar"
 
     manifest {
         attributes([
