@@ -2,17 +2,6 @@ pluginManagement {
     repositories {
         gradlePluginPortal()
         mavenCentral()
-        exclusiveContent {
-            forRepository {
-                maven {
-                    name = 'Fabric'
-                    url = uri('https://maven.fabricmc.net')
-                }
-            }
-            filter {
-                includeGroupAndSubgroups('net.fabricmc')
-            }
-        }
     }
 }
 
@@ -24,5 +13,4 @@ plugins {
 rootProject.name = 'MultiLoader-Template'
 includeBuild('build-logic')
 include('common')
-include('fabric')
 include('neoforge')
