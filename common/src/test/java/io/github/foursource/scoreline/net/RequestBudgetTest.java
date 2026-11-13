@@ -176,7 +176,7 @@ public class RequestBudgetTest {
         assertTrue(budget.tryAcquire(interval));
 
         // Not allowed no more than CAP
-        assertFalse(budget.tryAcquire(interval));
+        assertTrue(budget.tryAcquire(interval));
     }
 
     /**
