@@ -1,6 +1,7 @@
 plugins {
     id 'multiloader-common'
     id 'net.neoforged.moddev'
+    id 'jacoco'
 }
 
 neoForge {
@@ -63,4 +64,41 @@ sourceSets.configureEach {
 
 tasks.named('test') {
     useJUnitPlatform()
+}
+
+def logicPackages = ['io/github/foursource/scoreline/net/**']
+
+// The compiled classes of main, filtered to the logic packages. A FileTree is lazy:
+// Gradle evaluates it only when a task runs, after compileJava has produced the classes.
+def logicClasses = files(sourceSets.main.output.classesDirs).asFileTree.matching {
+    include logicPackages
+}
+
+tasks.named('jacocoTestReport') {
+    classDirectories.setFrom(logicClasses)
+}
+
+tasks.named('jacocoTestCoverageVerification') {
+    classDirectories.setFrom(logicClasses)
+    violationRules {
+        rule {
+            limit { counter = 'LINE';   value = 'COVEREDRATIO'; minimum = 0.95 }
+            limit { counter = 'BRANCH'; value = 'COVEREDRATIO'; minimum = 0.90 }
+        }
+    }
+    dependsOn tasks.named('test')
+    dependsOn checkLogicPackages
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('jacocoTestCoverageVerification'), tasks.named('jacocoTestReport')
+}
+
+def checkLogicPackages = tasks.register('checkLogicPackages') {
+    dependsOn tasks.named('compileJava')
+    doLast {
+        if (logicClasses.isEmpty()) {
+            throw new GradleException('Coverage gate: no classes match logicPackages')
+        }
+    }
 }
