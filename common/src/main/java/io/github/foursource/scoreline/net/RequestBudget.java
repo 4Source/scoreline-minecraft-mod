@@ -18,7 +18,7 @@ public final class RequestBudget {
     /**
      * Creates a full budget.
      *
-     * @param capacity             the most requests allowed in a burst; at least 1
+     * @param capacity the most requests allowed in a burst; at least 1
      * @param refillIntervalMillis the time for one token to return; at least 1
      * @throws IllegalArgumentException if either value is below 1
      */
