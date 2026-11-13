@@ -1,6 +1,6 @@
-package com.example.examplemod.platform;
+package io.github.foursource.scoreline.platform;
 
-import com.example.examplemod.platform.services.IPlatformHelper;
+import io.github.foursource.scoreline.platform.services.IPlatformHelper;
 import net.neoforged.fml.ModList;
 import net.neoforged.fml.loading.FMLLoader;
 

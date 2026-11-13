@@ -1,4 +1,4 @@
-package com.example.examplemod.platform.services;
+package io.github.foursource.scoreline.platform.services;
 
 public interface IPlatformHelper {
 
