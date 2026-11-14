@@ -53,7 +53,7 @@ v0.1 to v0.9 build the TAB leaderboard for online players in small steps; v0.10 
 
 **v0.10 to v1.0: history and graphs**
 
-- **v0.10 Recording:** all stats except those set to Off are recorded at five levels of detail. No screen yet, so data exists when the graphs arrive.
+- **v0.10 Recording:** all stats except those set to Off are recorded at four levels of detail. No screen yet, so data exists when the graphs arrive.
 - **v0.11 Graph basics:** tile protocol and the graph screen: one stat at a time, one line per player, lifetime overview, time ranges.
 - **v0.12 Graph interaction:** selecting players, hover details, prefetching, remembered state.
 - **v0.13 History privacy:** detail limits for other players' history, deletion of history, graph access.
@@ -246,7 +246,7 @@ Stats that a mod registers in Minecraft's normal statistics system appear automa
 
 ## History recording and storage (v0.10)
 
-The server records every stat's value over time at five levels of detail, so a graph of any time range needs only a few hundred points per player.
+The server records every stat's value over time at four levels of detail, so a graph of any time range needs only a few hundred points per player.
 
 **The problem**
 
@@ -263,36 +263,46 @@ The server records every stat's value over time at five levels of detail, so a g
 | Compress each value using the values before it | [Gorilla](http://www.vldb.org/pvldb/vol8/p1816-teller.pdf) reports a 10x smaller footprint from delta-of-delta timestamps and XOR'd values | Stats are whole numbers that only count up, the easiest case: store the difference to the previous value. Regular snapshot times cost almost nothing |
 | Recent data matters more than old data; aggregates matter more than single points | Gorilla | Fine levels have a limited retention; coarse levels are kept |
 | Send and store only what the pixels can show | [M4](http://www.vldb.org/pvldb/vol7/p797-jugel.pdf): per pixel column keep minimum, maximum, first and last value; up to 100x less data with an identical line chart | Levels of detail. For counters, first = minimum and last = maximum, so one value per time span is enough. Gauges need minimum, maximum and last |
-| Several resolutions of the same data, each with its own retention | RRDtool | Minutes, hours, days, weeks, months, written side by side |
+| Several resolutions of the same data, each with its own retention | RRDtool | Minutes, hours, days, months, written side by side |
 | Store names once, values by column, and only append | *Designing Data-Intensive Applications* (Kleppmann) | Stat ID dictionary, files organized by stat, append-only log |
 | Buffer writes, append sequentially, restructure in the background | [LSM-tree](https://link.springer.com/article/10.1007/s002360050048) | Memory buffer, log file, background packing into tiles |
 | Give each block its own reference value, so it can be read without any other block | [Compressing Relations and Indexes](https://minds.wisc.edu/items/121f3d51-f581-4a2d-901d-fb85f798043e) ("frame of reference"); Gorilla's blocks are decoded on their own | Each tile stores a start value per stat, then differences |
 | A running total has a start time; a value that existed before recording began counts no gain | [OpenTelemetry metrics data model](https://opentelemetry.io/docs/specs/otel/metrics/data-model/) | One baseline per player; "unknown start" for values that already existed |
 | Dependencies between resolutions and per-resolution retention do not mix well | [Thanos](https://github.com/thanos-io/thanos/blob/main/docs/components/compact.md), where users report lost data when one resolution's retention removes what another still needs | No tile ever needs another tile to be decoded |
 
-**Levels and retention**
+**Levels, points and tiles**
 
-| Level | Default retention | Allowed range |
-| --- | --- | --- |
-| Minutes | 48 hours | 0 (off) to 720 hours (30 days) |
-| Hours | 90 days | Up to 1,825 days (5 years); never shorter than the minutes retention |
-| Days | Forever | Optional limit |
-| Weeks | Forever | Fixed |
-| Months | Forever | Fixed |
+- A **level** is a resolution: the minute level holds one point per minute, the hour level one point per hour, and so on.
+- A **point** holds what one such span ended with: the value of every stat that changed in it (for gauges: minimum, maximum and last value).
+- A **tile** is the file that holds one level's points for a fixed span, for one player. It is the unit that is stored, deleted and sent. There is no second copy: a graph response is the requested stat's part of the tile, in the same encoding.
+
+| Level | One point per | One tile covers | Default retention | Allowed range |
+| --- | --- | --- | --- | --- |
+| Minutes | Minute | One day | 48 hours | 0 (off) to 720 hours (30 days) |
+| Hours | Hour | One month | 90 days | Up to 1,825 days (5 years); never shorter than the minutes retention |
+| Days | Day | One year | Forever | Optional limit; older history then has month points only |
+| Months | Month | One year | Forever | Fixed |
+
+- The same hour of play is stored at every level: as up to 60 minute points, as one hour point, and as part of one day and one month point. This overlap is intended. It is what lets a fine level expire without touching a coarse one.
+- Each span fits into the next: hours into days, days into months, months into years. A week level was considered and left out: weeks cross month and year borders, and they would only help views of about 2 to 10 years. It can be added later, because week points can be built exactly from day points.
+- A retention is a minimum. Whole tiles are deleted, so up to one tile span more stays on disk: one day for minutes, one month for hours.
 
 **How the levels are filled: all at once, never recomputed**
 
 1. Each minute, a snapshot delivers the stats that changed for the online players.
-2. That one snapshot updates all five levels at the same moment: it is appended to the minute level, and it updates the value of the current, still open hour, day, week and month for each changed stat.
-3. When a period ends, its entry is closed and written in final form. It is never touched again.
+2. That one snapshot updates all four levels at the same moment: it becomes a point of the minute level, and it updates the open point of the other three levels (the current hour, day and month) for each changed stat.
+3. When a point's span ends, the point is closed: it is appended to its level's open tile and never changes again.
+4. When a tile's span ends, the tile is packed into its final form, once. After that it is only read, and deleted as a whole when its retention ends.
+
+At any moment a player has one open point per level (none at the minute level, where every snapshot is already a closed point) and one open tile per level. Everything older is final.
 
 What follows from this:
 
 - No level is ever calculated from another one. There is no job that turns minutes into hours or hours into days.
-- Expired minute or hour data is removed by deleting whole files. The coarser levels already hold that period, so nothing is lost and nothing is rewritten.
-- The levels are independent. With the minute level switched off, the other four fill exactly the same way.
-- If minute snapshots are skipped under overload, the next snapshot carries the full totals, so the hour, day, week and month values stay correct.
-- Lowering a retention deletes older data for good; the config comment says so.
+- Expired minute or hour data is removed by deleting whole tiles. A tile is deleted when its whole span is older than the retention (at the defaults, minute data is up to 3 days old and hour data up to about 4 months). The coarser levels already hold that period, so nothing is lost and nothing is rewritten.
+- The levels are independent. With the minute level switched off, the other three fill exactly the same way.
+- If minute snapshots are skipped under overload, the next snapshot carries the full totals, so the hour, day and month values stay correct.
+- Lowering a retention deletes older data for good. The config comment says so, and also that a retention is a minimum.
 
 **What is recorded**
 
@@ -332,9 +342,16 @@ What follows from this:
 
 **File layout**
 
-- One folder per player (by UUID), files split by level and period, organized by stat inside. A graph reads only the players, periods and stat it shows, and deleting a player's history means deleting a folder.
-- New snapshots are appended to a log file. Finished periods are packed into their final tile format once and never changed again.
-- Each player folder holds one small state file: the baseline time, the hash of the recorded set, the time of the last recording, and the last value of every stat that is not 0. It is the only place where "no entry means 0" is decided. It is rewritten at logout and rebuilt from the newest months tile and the log after a crash.
+- One folder per player (by UUID), one file per tile. A graph reads only the players, tiles and stat it shows, and deleting a player's history means deleting a folder.
+- A **finished tile** is organized by stat: a start value, then the differences. It is written once, to a temporary file that is then renamed.
+- An **open tile** is an append-only file in time order: each closed point is added at its end. When the tile's span ends, it is packed into the finished form and the open file is deleted. The key frame of a months tile is written when the tile is opened, from the state file.
+- **Open points** are in no tile. They are the marks in the state file, held in memory while the player is online.
+- Each player folder holds one small **state file**: the baseline time, the hash of the recorded set, the time of the last recording, and for every stat that is not 0 its last value and three marks: whether it changed in the open hour, day and month. Gauges also store the minimum and maximum per open point. An open point is exactly this: the marked stats with their last values. The time of the last recording says which hour, day and month the marks belong to. The file is the only place where "no entry means 0" is decided. It is rewritten at the end of every hour for online players, at logout and at server stop.
+- **The log** is one append-only file for the whole server. Every snapshot is written there first, one entry per player: time, player, kind (minute snapshot, baseline, logout snapshot, change of the recorded set) and the changed stats with their values. The history thread then applies the entry: it updates the last values and marks, and appends the minute point to the minutes open tile.
+- The log exists only for crashes. After each hourly rewrite of the state files, a new log file is started and the old one is deleted. It therefore never holds more than about one hour, also when the minute level is off.
+- After a crash, the log entries newer than a player's state file are applied again. A point that already reached an open tile is recognised by its time and not added twice.
+- For offline players nothing is held in memory. A point or tile whose span ended while the player was offline is closed or packed when it is next needed: at the player's next join, before the stats are compared, or after the next request for that tile. The values cannot have changed in between, so the result is the same.
+- A request never waits for closing or packing. It is answered from the open tile and the marks as they are; the history thread tidies up afterwards.
 - There is no separate baseline file. The baseline values are the start values in each level's first tile, marked "unknown start". The months tiles are never deleted, so they survive retention.
 - The recorded sets are stored once per server, outside the player folders.
 - All storage sits behind the `HistoryStore` interface, so the layout can change later.
@@ -352,11 +369,14 @@ What follows from this:
 | Minutes | 9 to 22 MB, constant (48 hours) | 135 to 330 MB (30 days) | 50 players × 2,880 minutes × 20 to 50 changes × about 3 bytes |
 | Hours | 25 to 100 MB, constant (90 days) | 0.5 to 2 GB (5 years) | 100 to 400 MB per year: 50 players × 8,760 hours × a few dozen to a few hundred changes |
 | Days | 30 to 100 MB per year | Same, or bounded by an optional limit | A very active player changes many hundreds of stats per day |
-| Weeks and months | Up to about 20 MB per year | Always kept | Small enough to make the lifetime view possible |
+| Months | Up to about 5 MB per year | Always kept | 50 players × 12 months × one to two thousand changes |
+| Log | Under 1 MB, constant | Same | 50 players × 60 minutes × 20 to 50 changes; cut every hour |
 
 With default settings, total storage stays in the low hundreds of MB after years. On larger servers the cost grows linearly with players: the 48-hour minute window for 1,000 always-online players would be about 200 to 450 MB.
 
-The table does not include the start values. They add an estimated 1 to 4% to the minute, hour and day levels and 10 to 25% to the two smallest levels, weeks and months. The key frame in the months tile adds about 2 to 12 KB per player and year.
+The table does not include the start values. They add an estimated 1 to 4% to the minute, hour and day levels and 10 to 25% to the smallest level, months. The key frame in the months tile adds about 2 to 12 KB per player and year.
+
+The constant figures for minutes and hours are for the retention itself. Because whole tiles are deleted, up to one tile span more is on disk: at the defaults up to 1.5 times the minutes figure and about 1.33 times the hours figure.
 
 On large servers where many players join only once, the number of files per player matters more than their content. That belongs to the later work on larger servers.
 
@@ -387,20 +407,12 @@ Graph data travels as fixed tiles that both sides cache, so panning and zooming 
 
 **Tiles**
 
-| Level | One tile covers |
-| --- | --- |
-| Minutes | One day |
-| Hours | One month |
-| Days | One year |
-| Weeks | One year |
-| Months | One year |
-
+- A tile is the same unit as on disk: one level's points for a fixed span (a day of minutes, a month of hours, a year of days or months; see the table under History recording and storage).
 - A request names one stat, one or more tiles, and either a list of players or "all players".
-- A tile for a finished period never changes and is cached for the session.
-- No tile covers the whole lifetime. Such a tile would never be finished, could never be cached for good, and would grow without limit. The lifetime overview is made of the week or month tiles of every year, at the level that fits the width of the overview strip. Every closed year is final; only the current year stays open.
-- A week starts on Monday 00:00 UTC and belongs to the year in which it starts.
+- A finished tile never changes and is cached for the session.
+- No tile covers the whole lifetime. Such a tile would never be finished, could never be cached for good, and would grow without limit. The lifetime overview is made of the day or month tiles of every year: day tiles while the server is up to about two years old, month tiles after that. Every closed year is final; only the current year stays open.
 - Every tile carries its start values (see Encoding), so the client draws it without any other tile.
-- Largest expected responses: about 150 KB (a minute tile for 50 players), about 50 KB (lifetime overview).
+- Largest expected responses: about 150 KB (a minute tile for 50 players), about 110 KB (lifetime overview of two years at the day level for 50 players).
 
 **Making it feel instant** (target: well under 500 ms for every interaction)
 
@@ -569,7 +581,7 @@ The game's main thread only copies changed numbers once a minute; all other hist
 
 - **Change tracking:** the mod notes each stat change as it happens. A snapshot touches only changed stats, so its cost depends on activity, not on the number of stats.
 - **One history thread:** it alone encodes, updates the levels, and reads and writes files. No locks are needed.
-- **Write path:** memory buffer, then append to the log file, then background packing into tiles.
+- **Write path:** memory buffer, then append to the log file, then the open tiles and the marks. A tile is packed in the background when its span ends.
 - **Overload:** the hand-over queue has a fixed size. When it is full, minute snapshots are skipped and a warning is logged. The server never waits for the disk. Because stats are running totals, a skipped minute loses only timing detail. Baselines, changes of the recorded set and logout snapshots are never skipped: they are kept in memory until the history thread has taken them.
 - **Graph requests:** handled off the main thread. Finished tiles are cached in encoded form.
 - **Join:** the player's stats are compared with their state file, which finds values that rose or fell while nothing was recording, and stats that are new in the recorded set. A respawn is not a join.
@@ -622,6 +634,7 @@ The server sets one default mode and can override it per stat or category; the f
 - A one-time chat notice on join says that statistics are shown to other players (from v0.10 also: recorded over time) and names the command for the controls.
 - All privacy rules are enforced on the server before data is sent.
 - Data stays on the server. Clients keep tiles in memory for the session only.
+- Minute and hour data can stay on disk up to one tile span longer than its retention (one day for minutes, one month for hours), and the log holds up to one hour of snapshots.
 
 **Deletion and backups (v0.13)**
 
@@ -670,8 +683,8 @@ Two ways to draw the line after a decrease were considered. Showing the true tot
 | Server downtime | No snapshots; the line stays flat |
 | Player renames | History is keyed by UUID; names are looked up for display. On offline-mode servers a rename creates a new player (documented) |
 | Crash while writing the log | Each entry has a length and checksum; a broken last entry is skipped at startup |
-| Crash while packing a tile | Tiles are written to a temporary file and renamed; the log is replayed at startup |
-| Crash while writing a state file or a baseline | Written to a temporary file and renamed, before any entry that depends on it. A state file is rebuilt from the newest months tile and the log |
+| Crash while packing a tile | Tiles are written to a temporary file and renamed. The open tile is deleted only after the rename, so packing is simply done again |
+| Crash while writing a state file or a baseline | Written to a temporary file and renamed, before any entry that depends on it. After a crash the older state file is brought up to date from the log |
 | File format changes | Every file starts with a format version |
 | A mod with stats is removed | Its stats leave the recorded set (see above). The data stays in the files and is not offered while unregistered |
 | A stat ID is renamed by an update | Old and new ID appear as separate stats; no automatic merging. The new ID enters the recorded set with "unknown start" |
