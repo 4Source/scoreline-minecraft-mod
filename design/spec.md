@@ -163,6 +163,8 @@ The client asks for data only while TAB is held, and the server answers only tha
 
 The request format is the same from v0.2 on, and the hello payload starts with a protocol version, so later versions extend the protocol without breaking older clients.
 
+A vanilla stat's ID is Minecraft's own stat name, the one scoreboard objectives use: for example `minecraft.custom:minecraft.play_time` or `minecraft.mined:minecraft.diamond_ore`. `minecraft:play_time` alone is not unique, because it only names the value inside the stat type `minecraft:custom`. API stats use IDs such as `questmod:quests_completed`.
+
 ## Configuration (v0.4, extended in later steps)
 
 YACL stores the config files and draws the settings screen; all other code reaches the settings only through Scoreline's own `ClientSettings` or `ServerSettings` classes.
@@ -338,7 +340,7 @@ What follows from this:
 - The months tile is a full key frame: it stores a start value for every stat of the player that is not 0, whether it changed that year or not. A stat without entries in a finer tile did not change in that period, and its value is found in the months tile of the same year.
 - A stat that did not change costs nothing. In one hour a player changes a few dozen to a few hundred stats, in one minute about 20 to 50.
 - Each stored change takes about 2 to 3 bytes instead of 8 or more.
-- Stat IDs such as `minecraft:mined/minecraft:diamond_ore` are stored once in a dictionary and referenced by a small number.
+- Stat IDs such as `minecraft.mined:minecraft.diamond_ore` are stored once in a dictionary and referenced by a small number.
 - Counters store one value per time span. Gauges store minimum, maximum and last value.
 - This is Scoreline's own compact binary format. It replaces the earlier choice between JSON and compressed NBT, which cannot express these encodings.
 
@@ -781,7 +783,7 @@ The build-and-test workflow runs them on every change, so a failing test blocks 
 
 **Release details**
 
-1. **Version:** next version = last `v*` tag plus the chosen bump. Without any tag, the version in `gradle.properties` is used as is (0.1.0).
+1. **Version:** next version = last `v*` tag plus the chosen bump. Without any tag the release stops with an error, because since v0.1.0 that can only mean a checkout without tags.
 2. **Prepare:** with the GitHub App token, create `release/vX.Y.Z`, update the version in `gradle.properties`, run git-cliff so the unreleased changelog section becomes this version's, commit `chore(release): vX.Y.Z`, open the pull request and enable auto-merge.
 3. **Tag:** tag the merge commit `vX.Y.Z` and verify that it equals the version in `gradle.properties` on that commit.
 4. **Build:** build the jars once, after the full test suite has passed.
