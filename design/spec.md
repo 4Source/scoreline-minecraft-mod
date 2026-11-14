@@ -81,7 +81,7 @@ The project uses the MultiLoader Template: almost all code lives in a shared mod
 
 - Loader modules contain no logic, only registration.
 - Components that may be replaced later sit behind an interface: `ClientSettings` and `ServerSettings` (config), `HistoryStore` (storage), stat providers (data sources).
-- Code that needs no Minecraft classes (encoding, levels, rate limiting, reset detection) is kept free of them so it can be unit tested.
+- Code that needs no Minecraft classes (encoding, levels, rate limiting, baseline and decrease rules) is kept free of them so it can be unit tested.
 - Code that decides what to draw is kept apart from the code that draws (see Testing).
 
 **Dependencies**
@@ -236,9 +236,9 @@ Stats that a mod registers in Minecraft's normal statistics system appear automa
 
 - Values are whole numbers (`long`). Decimal values are stored scaled.
 - The server sends all API stat definitions in the hello payload, so server-only mods can add stats.
-- Vanilla statistics are wrapped by a built-in provider and use the same interface.
+- Vanilla statistics are wrapped by a built-in provider and use the same interface. It declares `time_since_death` and `time_since_rest` as gauges, because Minecraft sets them back to 0 on death and after sleeping. The other vanilla statistics are counters.
 - Scoreline asks providers for values; providers do not push changes.
-- A provider that throws an error is switched off with a log warning naming the mod. Slow providers are measured and reported.
+- A provider that throws an error is switched off with a log warning naming the mod. From v0.10 its stats leave the recorded set and get a "recording stopped" marker. Slow providers are measured and reported.
 - Registration uses Java's `ServiceLoader`; a plain `register(...)` method is the fallback if that proves unreliable across loaders.
 - The API is marked experimental from v0.6 until v1.0 and follows semantic versioning after that.
 
@@ -264,6 +264,9 @@ The server records every stat's value over time at five levels of detail, so a g
 | Several resolutions of the same data, each with its own retention | RRDtool | Minutes, hours, days, weeks, months, written side by side |
 | Store names once, values by column, and only append | *Designing Data-Intensive Applications* (Kleppmann) | Stat ID dictionary, files organized by stat, append-only log |
 | Buffer writes, append sequentially, restructure in the background | [LSM-tree](https://link.springer.com/article/10.1007/s002360050048) | Memory buffer, log file, background packing into tiles |
+| Give each block its own reference value, so it can be read without any other block | [Compressing Relations and Indexes](https://minds.wisc.edu/items/121f3d51-f581-4a2d-901d-fb85f798043e) ("frame of reference"); Gorilla's blocks are decoded on their own | Each tile stores a start value per stat, then differences |
+| A running total has a start time; a value that existed before recording began counts no gain | [OpenTelemetry metrics data model](https://opentelemetry.io/docs/specs/otel/metrics/data-model/) | One baseline per player; "unknown start" for values that already existed |
+| Dependencies between resolutions and per-resolution retention do not mix well | [Thanos](https://github.com/thanos-io/thanos/blob/main/docs/components/compact.md), where users report lost data when one resolution's retention removes what another still needs | No tile ever needs another tile to be decoded |
 
 **Levels and retention**
 
@@ -295,9 +298,30 @@ What follows from this:
 - Only changes: a stat that did not change since the last snapshot is not written.
 - Snapshots every minute for online players, plus a final one at logout.
 
+**Where a player's history starts (baseline)**
+
+- A player's history starts at their first join with the mod installed. This moment is the player's baseline time.
+- From the baseline time on, a counter without an entry is 0. No zero values are written, so a new player costs a few dozen bytes, not one entry per stat. Minecraft's own stats files work the same way.
+- A counter that is already above 0 at the baseline (the mod was installed on an existing server) is recorded with its value and marked "unknown start": the value is known, but not when it was earned, so no gain is counted for it.
+- Gauges are always recorded at the baseline, including the value 0.
+- The baseline is taken at join, before the first minute snapshot, so the first minute of play counts as gain.
+- A missing entry has two meanings that are kept apart: before a stat's first entry it means 0, after that it means "unchanged since the last entry".
+
+**The recorded set**
+
+- "No entry means 0" is only true for stats that were being recorded. The server therefore keeps track of the recorded set: the IDs and kinds of all recorded stats.
+- The sorted list is hashed (SHA-256). Each set is stored once per server under its hash, and a player's state file stores only the hash.
+- The set changes when a stat mode changes, a provider is added or switched off, a mod is added or removed, or an update renames a stat ID.
+- After a change, the old and the new list are compared, for online players at once and for everyone else at their next join:
+  - A stat that is new in the set and above 0 is recorded with "unknown start"; no gain is counted.
+  - A stat that is new in the set and 0 gets no entry.
+  - A stat that left the set gets a "recording stopped" marker.
+
 **Encoding**
 
-- Values are stored as the difference to the previous value, in a variable-length number format. Playtime rising by the same amount each hour becomes the same small number repeated.
+- Each tile stores a start value for every stat that appears in it. After that, values are stored as the difference to the previous value, in a variable-length number format. Playtime rising by the same amount each hour becomes the same small number repeated.
+- A tile can therefore be read without any other tile. Nothing is ever added up across the history.
+- The months tile is a full key frame: it stores a start value for every stat of the player that is not 0, whether it changed that year or not. A stat without entries in a finer tile did not change in that period, and its value is found in the months tile of the same year.
 - A stat that did not change costs nothing. In one hour a player changes a few dozen to a few hundred stats, in one minute about 20 to 50.
 - Each stored change takes about 2 to 3 bytes instead of 8 or more.
 - Stat IDs such as `minecraft:mined/minecraft:diamond_ore` are stored once in a dictionary and referenced by a small number.
@@ -308,6 +332,9 @@ What follows from this:
 
 - One folder per player (by UUID), files split by level and period, organized by stat inside. A graph reads only the players, periods and stat it shows, and deleting a player's history means deleting a folder.
 - New snapshots are appended to a log file. Finished periods are packed into their final tile format once and never changed again.
+- Each player folder holds one small state file: the baseline time, the hash of the recorded set, the time of the last recording, and the last value of every stat that is not 0. It is the only place where "no entry means 0" is decided. It is rewritten at logout and rebuilt from the newest months tile and the log after a crash.
+- There is no separate baseline file. The baseline values are the start values in each level's first tile, marked "unknown start". The months tiles are never deleted, so they survive retention.
+- The recorded sets are stored once per server, outside the player folders.
 - All storage sits behind the `HistoryStore` interface, so the layout can change later.
 
 | Layout considered | Decision | Reason |
@@ -327,6 +354,10 @@ What follows from this:
 
 With default settings, total storage stays in the low hundreds of MB after years. On larger servers the cost grows linearly with players: the 48-hour minute window for 1,000 always-online players would be about 200 to 450 MB.
 
+The table does not include the start values. They add an estimated 1 to 4% to the minute, hour and day levels and 10 to 25% to the two smallest levels, weeks and months. The key frame in the months tile adds about 2 to 12 KB per player and year.
+
+On large servers where many players join only once, the number of files per player matters more than their content. That belongs to the later work on larger servers.
+
 These figures are rough estimates and should be checked against real data during development.
 
 ## Graph data protocol (v0.11, completed in v0.12)
@@ -344,7 +375,7 @@ Graph data travels as fixed tiles that both sides cache, so panning and zooming 
 | --- | --- | --- |
 | Half a second of extra delay already reduces how much people explore; panning is more sensitive to delay than zooming | [Liu and Heer, 2014](https://idl.uw.edu/papers/latency) | Target well under 500 ms; sideways neighbours are prefetched before finer levels |
 | Cut data into fixed tiles per zoom level and fetch tiles ahead of the user, predicted from recent movement | [ForeCache](http://dx.doi.org/10.1145/2882903.2882919), which measured large latency gains over systems without prefetching | Fixed tiles, client cache, simple prefetch rules instead of a full prediction engine |
-| Overview first, zoom and filter, then details on demand | Shneiderman's visualization rule | The lifetime tile loads first; fine tiles only for selected players |
+| Overview first, zoom and filter, then details on demand | Shneiderman's visualization rule | The overview tiles for the whole lifetime load first; fine tiles only for selected players |
 | A response never needs more points than the graph has pixels | [M4](http://www.vldb.org/pvldb/vol7/p797-jugel.pdf) | The level is chosen so a view holds a few hundred points per line |
 
 | Request style considered | Decision | Reason |
@@ -359,15 +390,19 @@ Graph data travels as fixed tiles that both sides cache, so panning and zooming 
 | Minutes | One day |
 | Hours | One month |
 | Days | One year |
-| Weeks, months | The whole server lifetime |
+| Weeks | One year |
+| Months | One year |
 
-- A request names one stat, one or more tiles, and optionally a list of players.
+- A request names one stat, one or more tiles, and either a list of players or "all players".
 - A tile for a finished period never changes and is cached for the session.
+- No tile covers the whole lifetime. Such a tile would never be finished, could never be cached for good, and would grow without limit. The lifetime overview is made of the week or month tiles of every year, at the level that fits the width of the overview strip. Every closed year is final; only the current year stays open.
+- A week starts on Monday 00:00 UTC and belongs to the year in which it starts.
+- Every tile carries its start values (see Encoding), so the client draws it without any other tile.
 - Largest expected responses: about 150 KB (a minute tile for 50 players), about 50 KB (lifetime overview).
 
 **Making it feel instant** (target: well under 500 ms for every interaction)
 
-1. **Overview first:** opening the screen sends one request for the lifetime tile together with the tiles of the remembered range, at the level that range needs and for the remembered selected players. The overview strip and the graph both show full detail from the first response. On a first visit with nothing remembered, the default range (30 days) and the viewing player are used.
+1. **Overview first:** opening the screen sends one request for the overview tiles of the whole lifetime together with the tiles of the remembered range, at the level that range needs and for the remembered selected players. The overview strip and the graph both show full detail from the first response. On a first visit with nothing remembered, the default range (30 days) and the viewing player are used.
 2. **Coarse, then sharp:** on zoom, the client stretches the data it has and swaps in the finer tile when it arrives.
 3. **Fine detail for selected players only:** the overview loads coarse tiles for everyone; hour and minute tiles are requested only for selected players.
 4. **Prefetching:** panning loads the next tile in that direction; resting on an area loads the next finer level. Sideways neighbours come first.
@@ -382,6 +417,10 @@ v0.11 delivers the tiles, the client cache, overview first, coarse-then-sharp an
 - The server gives each player a request budget that refills over time, so opening the screen is not blocked.
 - The client cache has a memory cap of 128 MB by default (adjustable from 32 to 512 MB) and drops the least recently used tiles first. Tiles on screen are never dropped, and the cache is cleared when the player leaves the server. A heavy session needs about 30 MB.
 - Hover details need no request; all values are already on the client.
+- In the vanilla 26.3 code, a custom payload may be at most 1,048,576 bytes to the client and 32,767 bytes to the server. Whether NeoForge and Fabric apply these limits unchanged is an open check.
+- A response has a byte budget well below the limit to the client. A larger response is sent as several payloads, split by player. The budget's value is set once the limit is verified.
+- Splitting tiles by time does not bound a response, because its size also grows with the number of players. The byte budget does.
+- "All players" in a request avoids a long player list, which would otherwise reach the limit to the server at about 2,000 players.
 
 ## Graph screen (v0.11 and v0.12)
 
@@ -389,7 +428,74 @@ The graph takes about three quarters of the screen width and nearly all of its h
 
 **Layout**
 
-&#91;embedded content: graph screen · rough layout sketch\]
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 414" width="760" height="414" role="img" aria-labelledby="t" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13" xmlns:c2pa="http://c2pa.org/manifest">
+<title id="t">Scoreline graph screen layout: the graph takes most of the screen; controls stay small around it</title>
+<rect width="760" height="414" fill="#ffffff"/>
+<text x="24" y="28" font-size="15" font-weight="600" fill="#1f1f1e">The graph takes most of the screen; controls stay small around it</text>
+<rect x="24" y="44" width="712" height="346" rx="8" fill="none" stroke="#d6d5cf"/>
+<rect x="36" y="56" width="140" height="24" rx="4" fill="none" stroke="#8a8a85" stroke-width="1.25"/>
+<text x="106" y="72" text-anchor="middle" font-weight="600" fill="#1f1f1e">Time played</text>
+<rect x="324" y="56" width="44" height="24" rx="4" fill="none" stroke="#8a8a85"/>
+<text x="346" y="72" text-anchor="middle" font-size="11.5" fill="#1f1f1e">12h</text>
+<rect x="372" y="56" width="44" height="24" rx="4" fill="none" stroke="#8a8a85"/>
+<text x="394" y="72" text-anchor="middle" font-size="11.5" fill="#1f1f1e">24h</text>
+<rect x="420" y="56" width="44" height="24" rx="4" fill="none" stroke="#8a8a85"/>
+<text x="442" y="72" text-anchor="middle" font-size="11.5" fill="#1f1f1e">48h</text>
+<rect x="468" y="56" width="44" height="24" rx="4" fill="none" stroke="#8a8a85"/>
+<text x="490" y="72" text-anchor="middle" font-size="11.5" fill="#1f1f1e">7d</text>
+<rect x="516" y="56" width="44" height="24" rx="4" fill="#2a78d6" fill-opacity="0.12" stroke="#2a78d6" stroke-width="2"/>
+<text x="538" y="72" text-anchor="middle" font-size="11.5" font-weight="600" fill="#1f1f1e">30d</text>
+<rect x="564" y="56" width="44" height="24" rx="4" fill="none" stroke="#8a8a85"/>
+<text x="586" y="72" text-anchor="middle" font-size="11.5" fill="#1f1f1e">1y</text>
+<rect x="612" y="56" width="44" height="24" rx="4" fill="none" stroke="#8a8a85"/>
+<text x="634" y="72" text-anchor="middle" font-size="11.5" fill="#1f1f1e">All</text>
+<rect x="660" y="56" width="64" height="24" rx="4" fill="none" stroke="#8a8a85"/>
+<text x="692" y="72" text-anchor="middle" font-size="11.5" fill="#1f1f1e">Custom</text>
+<rect x="36" y="92" width="540" height="236" rx="4" fill="none" stroke="#8a8a85" stroke-width="1.25"/>
+<polyline points="48,312 150,300 250,292 350,280 450,270 564,262" fill="none" stroke="#8a8a85" stroke-opacity="0.45"/>
+<polyline points="48,308 150,296 250,280 350,268 450,256 564,240" fill="none" stroke="#8a8a85" stroke-opacity="0.45"/>
+<polyline points="48,316 150,310 250,302 350,296 450,288 564,280" fill="none" stroke="#8a8a85" stroke-opacity="0.45"/>
+<polyline points="48,304 150,286 250,270 350,250 450,238 564,224" fill="none" stroke="#8a8a85" stroke-opacity="0.45"/>
+<polyline points="48,318 150,314 250,308 350,304 450,298 564,292" fill="none" stroke="#8a8a85" stroke-opacity="0.45"/>
+<polyline points="48,300 150,268 250,236 350,196 450,160 564,116" fill="none" stroke="#2a78d6" stroke-width="2"/>
+<polyline points="48,306 150,280 250,256 350,218 450,196 564,164" fill="none" stroke="#e8662e" stroke-width="2"/>
+<polyline points="48,314 150,302 250,262 350,244 450,212 564,196" fill="none" stroke="#1aab7a" stroke-width="2"/>
+<text x="48" y="112" font-weight="600" fill="#1f1f1e">Graph</text>
+<text x="48" y="128" font-size="11.5" fill="#5f5e5a">grey: all players</text>
+<text x="48" y="144" font-size="11.5" fill="#5f5e5a">colour: selected</text>
+<line x1="350" x2="350" y1="100" y2="320" stroke="#8a8a85" stroke-dasharray="4 4"/>
+<circle cx="350" cy="196" r="3.5" fill="#2a78d6"/>
+<circle cx="350" cy="218" r="3.5" fill="#e8662e"/>
+<circle cx="350" cy="244" r="3.5" fill="#1aab7a"/>
+<rect x="170" y="104" width="168" height="72" rx="8" fill="#ecebe7" stroke="#8a8a85"/>
+<text x="182" y="128" font-weight="600" fill="#1f1f1e">Hover box</text>
+<text x="182" y="144" font-size="11.5" fill="#5f5e5a">time span of the point</text>
+<text x="182" y="160" font-size="11.5" fill="#5f5e5a">player: total (gain)</text>
+<rect x="36" y="338" width="540" height="40" rx="4" fill="none" stroke="#8a8a85" stroke-width="1.25"/>
+<polyline points="40,374 150,372 250,368 350,362 450,354 572,346" fill="none" stroke="#8a8a85" stroke-opacity="0.6"/>
+<rect x="470" y="338" width="106" height="40" rx="4" fill="#2a78d6" fill-opacity="0.12" stroke="#2a78d6" stroke-width="2"/>
+<text x="48" y="354" font-size="11.5" fill="#5f5e5a">Overview strip: whole server lifetime</text>
+<text x="523" y="371" text-anchor="middle" font-size="11.5" fill="#1f1f1e">visible range</text>
+<rect x="586" y="92" width="138" height="286" rx="4" fill="none" stroke="#8a8a85" stroke-width="1.25"/>
+<text x="598" y="112" font-weight="600" fill="#1f1f1e">Player list</text>
+<rect x="598" y="122" width="114" height="20" rx="4" fill="none" stroke="#d6d5cf"/>
+<text x="606" y="136" font-size="11.5" fill="#5f5e5a">Search</text>
+<rect x="598" y="155" width="10" height="10" rx="2" fill="#1aab7a" fill-opacity="1"/>
+<text x="616" y="164" font-size="11.5" fill="#1f1f1e">You</text>
+<rect x="598" y="175" width="10" height="10" rx="2" fill="#2a78d6" fill-opacity="1"/>
+<text x="616" y="184" font-size="11.5" fill="#1f1f1e">Selected player</text>
+<rect x="598" y="195" width="10" height="10" rx="2" fill="#e8662e" fill-opacity="1"/>
+<text x="616" y="204" font-size="11.5" fill="#1f1f1e">Selected player</text>
+<rect x="598" y="215" width="10" height="10" rx="2" fill="#8a8a85" fill-opacity="0.45"/>
+<text x="616" y="224" font-size="11.5" fill="#5f5e5a">Other player</text>
+<rect x="598" y="235" width="10" height="10" rx="2" fill="#8a8a85" fill-opacity="0.45"/>
+<text x="616" y="244" font-size="11.5" fill="#5f5e5a">Other player</text>
+<text x="598" y="270" font-size="11.5" fill="#5f5e5a">sorted by value</text>
+<rect x="598" y="342" width="54" height="24" rx="4" fill="none" stroke="#8a8a85"/>
+<text x="625" y="358" text-anchor="middle" font-size="11.5" fill="#1f1f1e">Top 5</text>
+<rect x="658" y="342" width="54" height="24" rx="4" fill="none" stroke="#8a8a85"/>
+<text x="685" y="358" text-anchor="middle" font-size="11.5" fill="#1f1f1e">Clear</text>
+<metadata><c2pa:manifest>AAAWgmp1bWIAAAAeanVtZGMycGEAEQAQgAAAqgA4m3EDYzJwYQAAABZcanVtYgAAAEdqdW1kYzJtYQARABCAAACqADibcQN1cm46YzJwYTpiMDI4NWU2NC1mZTVhLTRlMDgtODIwYy1hMDc0OTBkZWEyYzYAAAADl2p1bWIAAAApanVtZGMyYXMAEQAQgAAAqgA4m3EDYzJwYS5hc3NlcnRpb25zAAAAALxqdW1iAAAARGp1bWRjYm9yABEAEIAAAKoAOJtxE2MycGEuaW5ncmVkaWVudC52MwAAAAAYYzJzaKN3ZPhm+af6E9hK3lrUne0AAABwY2JvcqNpZGM6Zm9ybWF0bWltYWdlL3N2Zyt4bWxqaW5zdGFuY2VJRHgseG1wOmlpZDozZTExYWIyZC1kZjZlLTRkZWMtODQ5NS0wMDJhOGJhNzI4NzBscmVsYXRpb25zaGlwaHBhcmVudE9mAAAB4mp1bWIAAABBanVtZGNib3IAEQAQgAAAqgA4m3ETYzJwYS5hY3Rpb25zLnYyAAAAABhjMnNo8IN2vJ+1Cf8X82gzpTWS5wAAAZljYm9yomdhY3Rpb25zgqJmYWN0aW9ua2MycGEub3BlbmVkanBhcmFtZXRlcnOha2luZ3JlZGllbnRzgaJjdXJseC1zZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmluZ3JlZGllbnQudjNkaGFzaFggNF0ZMCO9/YB+qhmz2W3mIpVm9uSr0wZ1I0Kv0v3hFcWkZmFjdGlvbngdY29tLmFudGhyb3BpYy5jbGF1ZGUucHJvdmlkZWRqcGFyYW1ldGVyc6F4H2NvbS5hbnRocm9waWMub3JpZ2luLWNvbmZpZGVuY2VndW5rbm93bmtkZXNjcmlwdGlvbnhmQ2xhdWRlIHByb3ZpZGVkIHRoaXMgZmlsZSBhdCB0aGUgcmVxdWVzdCBvZiBhIHVzZXIgYW5kIG1heSBoYXZlIGNyZWF0ZWQgb3IgbW9kaWZpZWQgdGhlIGZpbGUgY29udGVudHMubXNvZnR3YXJlQWdlbnShZG5hbWVmQ2xhdWRlcmFsbEFjdGlvbnNJbmNsdWRlZPUAAADIanVtYgAAAEBqdW1kY2JvcgARABCAAACqADibcRNjMnBhLmhhc2guZGF0YQAAAAAYYzJzaKeJqszyEe1FD1U/kl1uPsAAAACAY2JvcqVjYWxnZnNoYTI1NmNwYWRMAAAAAAAAAAAAAAAAZGhhc2hYIJAnY/ob3VPr55Sb+sEoPB92Lbzim4Dg5xUE1WeCCuniZG5hbWVuanVtYmYgbWFuaWZlc3RqZXhjbHVzaW9uc4GiZXN0YXJ0GRgfZmxlbmd0aBkeBAAAAj5qdW1iAAAAJ2p1bWRjMmNsABEAEIAAAKoAOJtxA2MycGEuY2xhaW0udjIAAAACD2Nib3KlY2FsZ2ZzaGEyNTZpc2lnbmF0dXJleE1zZWxmI2p1bWJmPS9jMnBhL3VybjpjMnBhOmIwMjg1ZTY0LWZlNWEtNGUwOC04MjBjLWEwNzQ5MGRlYTJjNi9jMnBhLnNpZ25hdHVyZWppbnN0YW5jZUlEeCx4bXA6aWlkOjc0ODhmZDNhLTk0MDYtNGU0Yy04ZDljLTQ1MmRkYWM0OTY2Y3JjcmVhdGVkX2Fzc2VydGlvbnODomN1cmx4LXNlbGYjanVtYmY9YzJwYS5hc3NlcnRpb25zL2MycGEuaW5ncmVkaWVudC52M2RoYXNoWCA0XRkwI739gH6qGbPZbeYilWb25KvTBnUjQq/S/eEVxaJjdXJseCpzZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmFjdGlvbnMudjJkaGFzaFggYh33p46rQLA+bEZGWc8Nwlj2cTNHvIiVLkip4uUgdSiiY3VybHgpc2VsZiNqdW1iZj1jMnBhLmFzc2VydGlvbnMvYzJwYS5oYXNoLmRhdGFkaGFzaFggmxogKJXhambsexPELvNlMvDIjS4E2rag0TMC4BtcqXZ0Y2xhaW1fZ2VuZXJhdG9yX2luZm+jZG5hbWVvQW50aHJvcGljIEZpbGVzZ3ZlcnNpb25lMS4wLjBrc3BlY1ZlcnNpb25lMi40LjAAABA4anVtYgAAAChqdW1kYzJjcwARABCAAACqADibcQNjMnBhLnNpZ25hdHVyZQAAABAIY2JvctKEWQISogEmGCFZAgowggIGMIIBjaADAgECAhRA5aAK7sI50L64g/oGQgU9Z1UTADAKBggqhkjOPQQDAzBJMRcwFQYDVQQKEw5BbnRocm9waWMsIFBCQzEuMCwGA1UEAxMlQW50aHJvcGljIENvbnRlbnQgQ3JlZGVudGlhbHMgUm9vdCBDQTAeFw0yNjA4MDcxODQzNTZaFw0yODA4MDYxOTQzNTZaMEQxFzAVBgNVBAoTDkFudGhyb3BpYywgUEJDMSkwJwYDVQQDEyBBbnRocm9waWMgQ2xhdWRlIENvbnRlbnQgU2lnbmluZzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABJh6CmvLUBgFFNU0vUKlOVtE6djd17L5SuwX0LemFisBM3dkd/3cyjxFA3Qo5S46fX0/ihY0VZ7mfb9KF703t5OjWDBWMA4GA1UdDwEB/wQEAwIHgDAVBgNVHSUEDjAMBgorBgEEAYPoXgIBMAwGA1UdEwEB/wQCMAAwHwYDVR0jBBgwFoAUzlHiBIFOZFsj+OPEz5o+nMHXXMIwCgYIKoZIzj0EAwMDZwAwZAIwMXMdFJ4BetLLVY7ORuE9noqbbAZOZn/aArXyTwFAZfKrPzxF2vPoJNf1+UCdg1XGAjBwX1zd9WGqYkqmL5SFqw1QySjr1zJfpJM9+1rdDwSPLMOPOjKuiXjoU/pUUeG9RwmhY3BhZFkNngAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPZYQJKdMn1ZUFtz+MQ30glw0z2qm4IFG51N1xOeHQehQOp6qECnBfifIiWNj5oxaOYUbvUxV8XeoAuSTuNflgMw/Jo=</c2pa:manifest></metadata></svg>
 
 The sketch shows proportions and placement only; the final look follows vanilla Minecraft screens.
 
@@ -461,9 +567,10 @@ The game's main thread only copies changed numbers once a minute; all other hist
 - **Change tracking:** the mod notes each stat change as it happens. A snapshot touches only changed stats, so its cost depends on activity, not on the number of stats.
 - **One history thread:** it alone encodes, updates the levels, and reads and writes files. No locks are needed.
 - **Write path:** memory buffer, then append to the log file, then background packing into tiles.
-- **Overload:** the hand-over queue has a fixed size. When it is full, minute snapshots are skipped and a warning is logged. The server never waits for the disk. Because stats are running totals, a skipped minute loses only timing detail.
+- **Overload:** the hand-over queue has a fixed size. When it is full, minute snapshots are skipped and a warning is logged. The server never waits for the disk. Because stats are running totals, a skipped minute loses only timing detail. Baselines, changes of the recorded set and logout snapshots are never skipped: they are kept in memory until the history thread has taken them.
 - **Graph requests:** handled off the main thread. Finished tiles are cached in encoded form.
-- **Logout and shutdown:** final values are copied before a player object disappears; on server stop the buffer is flushed and the log closed.
+- **Join:** the player's stats are compared with their state file, which finds values that rose or fell while nothing was recording, and stats that are new in the recorded set. A respawn is not a join.
+- **Logout and shutdown:** final values are copied before a player object disappears, and the player's state file is rewritten; on server stop the buffer is flushed and the log closed.
 - **Measuring:** snapshot and write durations are logged, and a debug command shows queue size, cache size and timings. The spark profiler is used during development; the target is that Scoreline is invisible in tick time.
 - **Larger servers later:** snapshot work can be spread over several ticks.
 
@@ -519,24 +626,33 @@ Admins of public servers with EU players may have data-protection duties. The de
 
 Each situation that could make the history wrong or misleading has a fixed rule.
 
-The reset rule follows [Prometheus](https://prometheus.io/docs/prometheus/latest/querying/functions/), the most widely used monitoring system: any decrease of a counter is treated as a reset, and the value after it counts as new increase. Prometheus is equally strict that a value which can decrease must not be a counter, which is why every stat declares its kind.
+Every stat declares its kind. This follows [Prometheus](https://prometheus.io/docs/prometheus/latest/querying/functions/), the most widely used monitoring system, which is strict that a value which can decrease must not be a counter.
 
-Two ways to draw the line after a reset were considered. Showing the true total, which drops at the reset, is the standard behaviour because it matches the TAB column and the vanilla statistics screen. Showing accumulated activity, which never drops, could be offered later as a display option, since raw values and reset markers are both stored.
+Scoreline does not take over Prometheus's reset rule, in which the value after a decrease counts as new increase. That rule assumes a counter starts again from 0. In Minecraft a counter usually drops to an earlier value: a crash loses the minutes since the last autosave, or a backup is restored. The rule would then credit the player's whole remaining total as gain. So a decrease starts a new baseline for that stat: the value is recorded and no gain is counted. This matches the "unknown start" case of the [OpenTelemetry metrics data model](https://opentelemetry.io/docs/specs/otel/metrics/data-model/). Nothing is lost by this, because every value is seen at join, before the player can play.
+
+Two ways to draw the line after a decrease were considered. Showing the true total, which drops, is the standard behaviour because it matches the TAB column and the vanilla statistics screen. Showing accumulated activity, which never drops, could be offered later as a display option, since raw values and markers are both stored.
 
 | Situation | Rule |
 | --- | --- |
-| A counter's value goes down (stat reset, restored backup) | Store the raw value plus a reset marker. The graph line shows the true total and drops, with a marker. Gains are never negative |
-| A stat that legitimately goes up and down | It must be declared a gauge. No reset detection; tiles store minimum, maximum and last value |
-| First snapshot of a player or stat | Marked as baseline ("history starts here"); no gain is calculated for it |
+| A counter's value goes down (stat reset, restored backup, crash) | New baseline for that stat: the raw value is stored with a marker and no gain is counted. The graph line shows the true total and drops, with a marker. Gains are never negative |
+| Server crash | Minecraft saves stats only at autosave, logout and server stop, so after a crash the stats are older than the history. The minutes already recorded are kept, and the drop at the next join follows the rule above. Play that is repeated after the crash counts again; this is at most one autosave interval |
+| A player's stats file is missing or unreadable | Minecraft loads it as empty, so every counter goes down and follows the rule above |
+| A stat that legitimately goes up and down | It must be declared a gauge. No decrease detection; tiles store minimum, maximum and last value |
+| First join of a player with the mod installed | Player baseline ("history starts here"): counters above 0 are stored with "unknown start" and no gain; all other counters are 0 from here on, so their first entry is a real gain |
+| A stat enters the recorded set later (mode Off to on, new provider, new mod, renamed ID) | Above 0: stored with "unknown start", no gain. At 0: nothing is written |
+| A stat leaves the recorded set (mode to Off, provider switched off, mod removed) | A "recording stopped" marker is written. The graph shows a gap, not a flat line |
+| A value rose while nothing was recording (the server ran without the mod, an edited stats file) | Found at join by comparing with the state file. The new value is stored with a "changed while not recorded" marker and is not counted as gain |
+| History deleted while the player is online | A new baseline is taken at once |
 | Server clock jumps backwards | No snapshot is written until the clock has passed the last one; a warning is logged |
 | Time zones, daylight saving time | Timestamps are stored in UTC and shown in the player's local time |
 | Server downtime | No snapshots; the line stays flat |
 | Player renames | History is keyed by UUID; names are looked up for display. On offline-mode servers a rename creates a new player (documented) |
 | Crash while writing the log | Each entry has a length and checksum; a broken last entry is skipped at startup |
 | Crash while packing a tile | Tiles are written to a temporary file and renamed; the log is replayed at startup |
+| Crash while writing a state file or a baseline | Written to a temporary file and renamed, before any entry that depends on it. A state file is rebuilt from the newest months tile and the log |
 | File format changes | Every file starts with a format version |
-| A mod with stats is removed | Its data stays in the files and is not offered while unregistered |
-| A stat ID is renamed by an update | Old and new ID appear as separate stats; no automatic merging |
+| A mod with stats is removed | Its stats leave the recorded set (see above). The data stays in the files and is not offered while unregistered |
+| A stat ID is renamed by an update | Old and new ID appear as separate stats; no automatic merging. The new ID enters the recorded set with "unknown start" |
 
 ## Testing
 
@@ -552,8 +668,8 @@ Everything that decides something is tested by machine; only the thin layer that
 
 | Kind | What it covers | How |
 | --- | --- | --- |
-| Unit tests | Encoding, levels, retention, reset and baseline rules, request budget, format presets, config validation, layout decisions | JUnit in `common`, no Minecraft needed |
-| Property tests | Rules that must always hold, for example "decoding what was encoded returns the same values" | Thousands of random inputs per rule |
+| Unit tests | Encoding, levels, retention, baseline and decrease rules, recorded-set changes, request budget, format presets, config validation, layout decisions | JUnit in `common`, no Minecraft needed |
+| Property tests | Rules that must always hold, for example "decoding what was encoded returns the same values", "a tile's start value plus its differences equals the next tile's start value" and "all levels show the same total at a shared boundary" | Thousands of random inputs per rule |
 | Simulated time | Levels, retention and file sizes over a long period, checked against the estimates | A fake clock plays a year of server life in seconds |
 | Protocol compatibility | Today's code still reads the messages of every earlier protocol version | Stored example messages per version (golden files) |
 | Crash safety | Startup recovers everything before a broken log entry | The log file is cut off at every possible position |
@@ -701,14 +817,15 @@ All design questions are decided. These points can only be answered while buildi
 **To verify technically**
 
 - [ ] Whether the MultiLoader Template and NeoForge's game-test framework are ready for 26.3 (v0.1).
-- [ ] Minecraft's size limit for a single payload, against the 150 KB tile estimate (v0.2).
+- [ ] Minecraft's size limit for a single payload, against the 150 KB tile estimate (v0.2). The vanilla 26.3 code has 1,048,576 bytes to the client and 32,767 bytes to the server; what NeoForge and Fabric do with registered payloads is not verified.
 - [ ] Tooling for the client startup check on NeoForge and Fabric (v0.3).
 - [ ] Whether the publishing action supports 26.x versions, and how long CurseForge's review takes (v0.3).
 - [ ] YACL 3.9.7 class and method names, and how YACL is referenced from the `common` module (v0.4).
 - [ ] YACL button options that open the stat picker screen (v0.5).
 - [ ] `ServiceLoader` registration across separate mods on NeoForge and Fabric, with a small test mod (v0.6).
 - [ ] The hook for stat changes in 26.3 and its mapping names (v0.7).
-- [ ] Storage estimates against real data (v0.10).
+- [ ] Storage estimates against real data, including the cost of the start values (v0.10).
+- [ ] The wording of the OpenTelemetry data model on resets, unknown start times and gaps, and that Gorilla stores a block's first value in full, before the spec cites them as fact (v0.10).
 
 ## References
 
@@ -722,7 +839,10 @@ The design borrows from published work on time-series storage and interactive vi
 | [Dynamic Prefetching of Data Tiles for Interactive Visualization](http://dx.doi.org/10.1145/2882903.2882919) (Battle et al., SIGMOD 2016) | Tiles and prefetching |
 | [The Effects of Interactive Latency on Exploratory Visual Analysis](https://idl.uw.edu/papers/latency) (Liu and Heer, 2014) | The 500 ms target; panning before zooming |
 | [Privacy by Design: The 7 Foundational Principles](https://www.ietf.org/slides/slides-privacyws-privacy-by-design-the-seven-foundational-principles-00.pdf) (Cavoukian) | Privacy defaults and transparency |
-| [Prometheus query functions](https://prometheus.io/docs/prometheus/latest/querying/functions/) | Counter reset handling; counter and gauge |
+| [Prometheus query functions](https://prometheus.io/docs/prometheus/latest/querying/functions/) | Counter and gauge; its reset rule is deliberately not taken over |
+| [OpenTelemetry metrics data model](https://opentelemetry.io/docs/specs/otel/metrics/data-model/) | Start time of a running total; "unknown start" for baselines and decreases; explicit markers for missing data |
+| [Compressing Relations and Indexes](https://minds.wisc.edu/items/121f3d51-f581-4a2d-901d-fb85f798043e) (Goldstein, Ramakrishnan and Shaft, ICDE 1998) | A reference value per block ("frame of reference"): start values per tile |
+| [Thanos compactor documentation](https://github.com/thanos-io/thanos/blob/main/docs/components/compact.md) | Why tiles must not depend on other tiles when each level has its own retention |
 | *Designing Data-Intensive Applications* (Kleppmann) | Dictionary encoding, column layout, append-only logs |
 | *Java Concurrency in Practice* (Goetz) | One owner thread for the history data |
 | RRDtool | Several resolutions of the same data with retention |
