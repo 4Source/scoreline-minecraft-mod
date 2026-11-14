@@ -1,6 +1,6 @@
 # Scoreline – Design Spec
 
-Nov 11, 2026 · @Dennis
+Nov 11, 2026
 
 ## Overview
 
