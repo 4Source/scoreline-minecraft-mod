@@ -1,0 +1,234 @@
+name: Release
+
+# Started by hand. Ends with a draft GitHub Release that holds the jar.
+# Pull request, tag and release are made with the GitHub App token: actions done with the
+# default workflow token do not start other workflows, such as the build check.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version part to raise (ignored for the first release)
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      dry_run:
+        description: Only show the version and the changelog; create nothing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Never two releases at once
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  GIT_CLIFF_VERSION: 2.14.2
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      - name: Check out with full history and all tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Compute the next version
+        id: next
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          version=$(scripts/next-version.sh "$BUMP")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Show version and changelog (dry run)
+        if: ${{ inputs.dry_run }}
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: |
+          pipx install "git-cliff==$GIT_CLIFF_VERSION"
+          {
+            echo "# Dry run: v$VERSION"
+            echo
+            echo "Nothing was created."
+            echo
+            git-cliff --unreleased --tag "v$VERSION" --strip all
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  prepare:
+    needs: version
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    # Includes waiting for the build check and the merge of the release pull request
+    timeout-minutes: 50
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    outputs:
+      merge_commit: ${{ steps.merge.outputs.merge_commit }}
+    steps:
+      - name: Create the App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Check out with full history and all tags
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Create the release branch and set the version
+        run: |
+          git switch -c "release/v$VERSION"
+          sed -i "s/^version=.*/version=$VERSION/" gradle.properties
+          scripts/check-version.sh "$VERSION"
+
+      - name: Write the changelog section
+        run: |
+          pipx install "git-cliff==$GIT_CLIFF_VERSION"
+          git-cliff --unreleased --tag "v$VERSION" --prepend CHANGELOG.md
+
+      - name: Commit, push and open the pull request
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          user_id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git commit -am "chore(release): v$VERSION"
+          git push -u origin "release/v$VERSION"
+          gh pr create --base master --head "release/v$VERSION" \
+            --title "chore(release): v$VERSION" \
+            --body "Release v$VERSION, opened by the release workflow. It merges by itself once the build check passes."
+          gh pr merge "release/v$VERSION" --auto --merge
+
+      - name: Wait until the pull request is merged
+        id: merge
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          while true; do
+            state=$(gh pr view "release/v$VERSION" --json state --jq .state)
+            case "$state" in
+              MERGED) break ;;
+              CLOSED)
+                echo "The release pull request was closed without being merged" >&2
+                exit 1
+                ;;
+            esac
+            sleep 30
+          done
+          merge_commit=$(gh pr view "release/v$VERSION" --json mergeCommit --jq .mergeCommit.oid)
+          echo "merge_commit=$merge_commit" >> "$GITHUB_OUTPUT"
+
+  tag:
+    needs: [version, prepare]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Create the App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Check out the merge commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.merge_commit }}
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Check the version in gradle.properties
+        run: scripts/check-version.sh "$VERSION"
+
+      - name: Create and push the tag
+        run: |
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+
+  build:
+    needs: [version, tag]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/v${{ needs.version.outputs.version }}
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 25
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build
+        run: ./gradlew build
+
+      - name: Smoke run
+        run: scripts/smoke.sh
+
+      - name: Upload the jar
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-jar
+          path: neoforge/build/libs/scoreline-${{ needs.version.outputs.version }}+*-neoforge.jar
+          if-no-files-found: error
+
+  draft:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Create the App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Check out the tag with full history
+        uses: actions/checkout@v7
+        with:
+          ref: refs/tags/v${{ needs.version.outputs.version }}
+          fetch-depth: 0
+
+      - name: Download the jar
+        uses: actions/download-artifact@v8
+        with:
+          name: release-jar
+          path: release-jar
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          pipx install "git-cliff==$GIT_CLIFF_VERSION"
+          git-cliff --latest --strip all > release-notes.md
+          prerelease=()
+          if [[ "$VERSION" == 0.* ]]; then
+            prerelease=(--prerelease)
+          fi
+          gh release create "v$VERSION" release-jar/*.jar \
+            --draft --verify-tag "${prerelease[@]}" \
+            --title "v$VERSION" \
+            --notes-file release-notes.md
