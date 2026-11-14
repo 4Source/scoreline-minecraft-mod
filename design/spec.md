@@ -30,6 +30,7 @@ Scoreline is a Minecraft mod that shows player statistics as extra columns in th
 | v0.11 | Graph basics | Tile protocol; graph screen with lines, ranges and overview strip |
 | v0.12 | Graph interaction | Selecting players, hover box, prefetching, remembered state |
 | v0.13 | History privacy | Detail limits for others, deletion, graph access, docs |
+| v0.14 | Storage review | Decide from measured data whether levels and tiles change; if so, the new level table, packed files and the conversion of existing data |
 | v1.0 | Stable | Stabilization after real-server testing; API declared stable |
 | Later |  | A view that includes offline players, support for larger servers |
 
@@ -37,7 +38,7 @@ Each step gets its own implementation plan and ends with something that can be t
 
 ## Scope
 
-v0.1 to v0.9 build the TAB leaderboard for online players in small steps; v0.10 to v0.13 add recorded history and graphs; v1.0 stabilizes.
+v0.1 to v0.9 build the TAB leaderboard for online players in small steps; v0.10 to v0.13 add recorded history and graphs; v0.14 reviews the storage layout with measured data; v1.0 stabilizes.
 
 **v0.1 to v0.9: the TAB leaderboard**
 
@@ -57,6 +58,7 @@ v0.1 to v0.9 build the TAB leaderboard for online players in small steps; v0.10 
 - **v0.11 Graph basics:** tile protocol and the graph screen: one stat at a time, one line per player, lifetime overview, time ranges.
 - **v0.12 Graph interaction:** selecting players, hover details, prefetching, remembered state.
 - **v0.13 History privacy:** detail limits for other players' history, deletion of history, graph access.
+- **v0.14 Storage review:** the levels and tiles are checked against figures measured on real servers, and changed if the figures support it (see Review of levels and tiles).
 - **v1.0 Stable:** fixes from real-server testing; the API is declared stable.
 
 **Out of scope for now**
@@ -362,6 +364,24 @@ What follows from this:
 | One folder per player, files per level and period | Chosen | Reads only what a graph needs; scales; easy deletion |
 | A database such as SQLite | Not now | Needs native libraries, which complicates multi-loader builds. Possible later behind `HistoryStore` |
 
+**Review of levels and tiles (v0.14)**
+
+v0.10 builds the layout above: four calendar levels and large tiles, about 7 files per active player. A finer design was worked out and is deferred until real servers have produced data, because every size in this section is an estimate. What the layout above lacks is quality, not correctness: the steps between levels are uneven (factors of 60, 24 and 30), and a day tile is loaded for a whole year at once.
+
+| Candidate | What changes | Gain | Cost |
+| --- | --- | --- | --- |
+| Levels that fit into each other | For example 1 minute, 15 minutes, 4 hours, 3 days, 48 days: a factor of about 16 between levels | Even steps when zooming; no calendar rules; the finest level kept forever can be coarser than a day, which slows the growth | One more level; points no longer sit on calendar days |
+| Small tiles | A tile covers one point of the level above, or a fixed number of them. Levels and tiles then form a tree: a coarse point is replaced by the tile below it | A view loads only what it shows; retention keeps less beyond its limit | Start values take a larger share of the data; needs the next row |
+| Many tiles per file | One file per fixed time span, or a new file when the old one is full, with a lookup table inside the server | The file count stays low with small tiles, and can follow a player's activity | File and tile are no longer the same unit |
+
+Rejected for the review: tiles with a fixed size and a flexible time span that the client sees. The client could no longer name a tile by its time, and tile borders would differ per player.
+
+What v0.10 to v0.12 do so that the change stays cheap:
+
+- The levels are defined in one place: how a moment maps to a point and to a tile, and the retention. No other code names a level by its calendar unit.
+- A new level's span must be a multiple of an existing one, so recorded data converts exactly: 15 minutes from minute points, 4 hours from hour points, 3 and 48 days from day points. Spans such as 16 or 256 minutes do not qualify.
+- The debug command measures per level: changes per point, bytes per player and day, file count and response sizes. From stored minute data it also calculates what another set of levels would have cost.
+
 **Size estimate (worst case: 50 players always online and active)**
 
 | Level | At default retention | At maximum retention | Basis |
@@ -409,6 +429,7 @@ Graph data travels as fixed tiles that both sides cache, so panning and zooming 
 
 - A tile is the same unit as on disk: one level's points for a fixed span (a day of minutes, a month of hours, a year of days or months; see the table under History recording and storage).
 - A request names one stat, one or more tiles, and either a list of players or "all players".
+- A tile is named by its level number and its index on that level's time grid, never by a calendar unit. The protocol version changes when the set of levels changes.
 - A finished tile never changes and is cached for the session.
 - No tile covers the whole lifetime. Such a tile would never be finished, could never be cached for good, and would grow without limit. The lifetime overview is made of the day or month tiles of every year: day tiles while the server is up to about two years old, month tiles after that. Every closed year is final; only the current year stays open.
 - Every tile carries its start values (see Encoding), so the client draws it without any other tile.
@@ -586,7 +607,7 @@ The game's main thread only copies changed numbers once a minute; all other hist
 - **Graph requests:** handled off the main thread. Finished tiles are cached in encoded form.
 - **Join:** the player's stats are compared with their state file, which finds values that rose or fell while nothing was recording, and stats that are new in the recorded set. A respawn is not a join.
 - **Logout and shutdown:** final values are copied before a player object disappears, and the player's state file is rewritten; on server stop the buffer is flushed and the log closed.
-- **Measuring:** snapshot and write durations are logged, and a debug command shows queue size, cache size and timings. The spark profiler is used during development; the target is that Scoreline is invisible in tick time.
+- **Measuring:** snapshot and write durations are logged, and a debug command shows queue size, cache size and timings. It also reports the storage figures per level that the v0.14 review needs (see Review of levels and tiles). The spark profiler is used during development; the target is that Scoreline is invisible in tick time.
 - **Larger servers later:** snapshot work can be spread over several ticks.
 
 ## Privacy (v0.8 for the TAB list, v0.13 for history)
@@ -769,7 +790,7 @@ The build-and-test workflow runs them on every change, so a failing test blocks 
 
 - The version lives in `gradle.properties`; the build writes it into the mod metadata of each loader.
 - A dry-run option shows the next version and changelog without creating anything.
-- v0.1 to v0.8 are published as alpha, v0.9 to v0.13 as beta, and 1.0 onwards as release.
+- v0.1 to v0.8 are published as alpha, v0.9 to v0.14 as beta, and 1.0 onwards as release.
 - The changelog is generated from commit messages, so commits follow the conventional format (`feat:`, `fix:`, `chore:`).
 - Store uploads use an existing action for mod uploads (for example `mc-publish`); its support for 26.x must be checked first. API tokens are stored as repository secrets.
 - Jar names follow `scoreline-<mod version>+<Minecraft version>-<loader>.jar`.
@@ -820,6 +841,7 @@ Until the public launch in v0.9, only the latest docs are published. Kept versio
 | v0.10 | Storage and retention |
 | v0.11, v0.12 | Graph screen guide |
 | v0.13 | Privacy for history |
+| v0.14 | Storage sizing from measured figures; upgrade notes if the layout changes |
 
 ## Publishing and visibility
 
