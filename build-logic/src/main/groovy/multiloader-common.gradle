@@ -1,6 +1,15 @@
 plugins {
     id 'java-library'
     id 'maven-publish'
+    id 'com.diffplug.spotless'
+}
+
+// Code style: every Java file must match the Eclipse formatter profile that VS Code uses too.
+// spotlessCheck runs as part of check; spotlessApply reformats the files.
+spotless {
+    java {
+        eclipse('4.41').configFile(rootProject.file('config/eclipse-formatter.xml'))
+    }
 }
 
 base {
@@ -20,6 +29,8 @@ tasks.withType(Jar).configureEach {
 }
 
 jar {
+    // scoreline-<mod version>+<Minecraft version>-<module>.jar, for example scoreline-0.1.0+26.3-neoforge.jar
+    archiveFileName = "${mod_id}-${version}+${minecraft_version}-${project.name}.jar"
 
     manifest {
         attributes([
@@ -40,8 +51,6 @@ processResources {
             'group'                        : project.group, //Else we target the task's group.
             'minecraft_version'            : minecraft_version,
             'minecraft_version_range'      : minecraft_version_range,
-            'fabric_version'               : fabric_version,
-            'fabric_loader_version'        : fabric_loader_version,
             'mod_name'                     : mod_name,
             'mod_author'                   : mod_author,
             'mod_id'                       : mod_id,
@@ -61,7 +70,7 @@ processResources {
         expand expandProps
     }
 
-    filesMatching(['pack.mcmeta', 'fabric.mod.json', '*.mixins.json']) {
+    filesMatching(['pack.mcmeta', '*.mixins.json']) {
         expand jsonExpandProps
     }
 

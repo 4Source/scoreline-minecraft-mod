@@ -1,0 +1,42 @@
+# git-cliff configuration: builds CHANGELOG.md from conventional commits.
+# https://git-cliff.org/docs/configuration
+
+[changelog]
+# Must equal the first lines of CHANGELOG.md exactly: --prepend removes this text from the
+# file and writes it back above the new section.
+header = """
+# Changelog
+
+"""
+# One section per version. The <!-- n --> prefixes only fix the group order and are stripped.
+body = """
+{% if version %}\
+## {{ version | trim_start_matches(pat="v") }} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## Unreleased
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }}\
+{% endfor %}
+{% endfor %}
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+# Merge commits and other messages without a type are left out.
+filter_unconventional = true
+split_commits = false
+commit_parsers = [
+    { message = "^chore\\(release\\):", skip = true },
+    { message = "^feat", group = "<!-- 0 -->Features" },
+    { message = "^fix", group = "<!-- 1 -->Fixes" },
+    { message = ".*", group = "<!-- 2 -->Other" },
+]
+filter_commits = false
+tag_pattern = "v[0-9]+\\.[0-9]+\\.[0-9]+"
+topo_order = false
+sort_commits = "oldest"

@@ -1,0 +1,50 @@
+name: Build
+
+on: 
+    pull_request:
+    push:
+        branches:
+            - master
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 25
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Build
+        run: ./gradlew build
+
+      - name: Smoke run
+        run: scripts/smoke.sh
+
+      - name: Upload jars
+        uses: actions/upload-artifact@v7
+        with:
+          name: jars
+          path: neoforge/build/libs/*.jar
+          if-no-files-found: error
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: reports
+          path: |
+            common/build/reports
+            neoforge/runs/gametest/logs
