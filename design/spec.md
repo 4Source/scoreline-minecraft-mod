@@ -173,7 +173,8 @@ YACL stores the config files and draws the settings screen; all other code reach
 | Column slots 1 to 4 | v0.5 | Playtime, deaths, none, none | Each slot is a button that opens the stat picker (described under Graph screen); only stats the server allows are offered |
 | Visibility (hide me, opt-in) | v0.8 | Visible | Chosen by the player, stored on the server |
 | Tile cache size | v0.11 | 128 MB | 32 to 512 MB |
-| Remembered graph state | v0.12 | none | Last stat, range and selected players per server; not shown in the settings screen |
+| Remembered graph state | v0.12 | none | Last stat, range, selected and hidden players per server; not shown in the settings screen |
+| Delete my history | v0.13 | — | A button, not a stored value. Asks for confirmation, then sends the same request as the command; the server enforces it |
 
 Saved to `config/scoreline-client.json`.
 
@@ -186,6 +187,7 @@ Saved to `config/scoreline-client.json`.
 | Mode overrides | v0.8 | none | A mode for a single stat or a whole category, for example everything under "picked up" |
 | History retention per level | v0.10 | 48 hours, 90 days, forever | Minutes, hours, days; ranges under History recording |
 | Graph access | v0.13 | Everyone | Everyone, operators only, or nobody |
+| Deletion list path | v0.13 | `scoreline/deletions.dat` in the server root | Must lie outside the world folder; see Deletion and backups under Privacy |
 
 Saved to `config/scoreline-server.json`.
 
@@ -517,6 +519,7 @@ The sketch shows proportions and placement only; the final look follows vanilla 
 - All players start as thin grey lines.
 - Selected players get a colour and a thicker line, up to about eight at once. The viewing player is selected by default.
 - Fine detail (hours, minutes) is loaded only for selected players.
+- A player can be hidden from the player list (v0.12). A hidden player is neither requested nor drawn and is not counted by "Top 5". The list shows hidden players dimmed at the bottom, so they can be shown again.
 
 **Selecting players**
 
@@ -533,7 +536,7 @@ The sketch shows proportions and placement only; the final look follows vanilla 
 
 **Remembered per server (client side)**
 
-- Last stat, last range including the custom one, and the selected players.
+- Last stat, last range including the custom one, the selected players and the hidden players.
 
 **Opening**
 
@@ -620,7 +623,25 @@ The server sets one default mode and can override it per stat or category; the f
 - All privacy rules are enforced on the server before data is sent.
 - Data stays on the server. Clients keep tiles in memory for the session only.
 
-Admins of public servers with EU players may have data-protection duties. The delete command and the join notice give them tools for that; this is not legal advice.
+**Deletion and backups (v0.13)**
+
+A deletion must not be undone silently when an admin restores a backup made before it. A player who deleted their history and left cannot notice that it came back.
+
+| Idea | Source | How Scoreline uses it |
+| --- | --- | --- |
+| Data in backups that cannot be edited is "put beyond use", and the deletion is applied again when a backup is restored; a minimal suppression list of erased IDs may be kept for that purpose | UK ICO guidance on the right to erasure | A deletion list, applied again at every server start |
+| A deletion is recorded as a marker; if the marker disappears before an older copy of the data, the data comes back | Tombstones in Cassandra ("zombie" data) | Entries in the deletion list never expire |
+| Encrypt each person's data with their own key and delete the key to make every copy unreadable | Boneh and Lipton, "A Revocable Backup System" (1996); Perlman, "The Ephemerizer" (2005) | Rejected: the key store has the same backup problem, losing it destroys all history, and every tile would need encryption |
+
+- Every deletion, by the player or by an admin, adds an entry to the deletion list: the player's UUID and the deletion time in UTC. The file starts with a format version and is written to a temporary file and renamed.
+- The list lies outside the world folder (path in the server config). Its entries never expire.
+- At each server start, a player folder whose baseline time is earlier than that player's deletion time is deleted again. Replaying the log skips that player's entries from before the deletion time. A player who came back after the deletion has a later baseline and keeps their new data.
+- The server log reports how many deletions were applied again.
+- `/scoreline privacy deletions` lists the entries, so an admin can check after a restore that the list itself was not rolled back.
+- Limit: if the deletion list is restored from the same old backup, the deletion is lost. The admin guide says to keep the list out of restores or to keep a copy elsewhere.
+- The delete confirmation says: this deletes Scoreline's history, not Minecraft's own statistics (the TAB columns keep showing those); backups may still hold the data until they expire; the server deletes it again when such a backup is restored.
+
+Admins of public servers with EU players may have data-protection duties. The delete command, the deletion list and the join notice give them tools for that; this is not legal advice.
 
 ## Data correctness (v0.10)
 
@@ -643,6 +664,7 @@ Two ways to draw the line after a decrease were considered. Showing the true tot
 | A stat leaves the recorded set (mode to Off, provider switched off, mod removed) | A "recording stopped" marker is written. The graph shows a gap, not a flat line |
 | A value rose while nothing was recording (the server ran without the mod, an edited stats file) | Found at join by comparing with the state file. The new value is stored with a "changed while not recorded" marker and is not counted as gain |
 | History deleted while the player is online | A new baseline is taken at once |
+| A backup from before a deletion is restored | The deletion is applied again at server start from the deletion list (see Deletion and backups under Privacy) |
 | Server clock jumps backwards | No snapshot is written until the clock has passed the last one; a warning is logged |
 | Time zones, daylight saving time | Timestamps are stored in UTC and shown in the player's local time |
 | Server downtime | No snapshots; the line stays flat |
