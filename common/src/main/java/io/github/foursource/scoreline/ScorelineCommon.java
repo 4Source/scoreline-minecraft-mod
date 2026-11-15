@@ -13,8 +13,7 @@ import io.github.foursource.scoreline.platform.Services;
 public final class ScorelineCommon {
     public static final Logger LOG = LoggerFactory.getLogger(Constants.MOD_NAME);
 
-    private ScorelineCommon() {
-    }
+    private ScorelineCommon() {}
 
     /**
      * Starts the shared part of the mod.
