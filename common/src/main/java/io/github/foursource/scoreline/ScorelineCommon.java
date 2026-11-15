@@ -11,6 +11,9 @@ import io.github.foursource.scoreline.platform.Services;
  * Code in {@code common} may use vanilla Minecraft only; loader-specific behavior goes through {@link io.github.foursource.scoreline.platform.Services}.
  */
 public final class ScorelineCommon {
+    /**
+     * The mod's logger, named after {@link Constants#MOD_NAME}.
+     */
     public static final Logger LOG = LoggerFactory.getLogger(Constants.MOD_NAME);
 
     private ScorelineCommon() {}

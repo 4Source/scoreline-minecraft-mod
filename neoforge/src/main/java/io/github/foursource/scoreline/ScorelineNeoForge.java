@@ -8,7 +8,11 @@ import net.neoforged.fml.common.Mod;
  */
 @Mod(Constants.MOD_ID)
 public final class ScorelineNeoForge {
-
+    /**
+     * Called by NeoForge when it loads the mod.
+     *
+     * @param modContainer the mod's container, which holds its metadata
+     */
     public ScorelineNeoForge(ModContainer modContainer) {
         // The version comes from neoforge.mods.toml, which the build fills from gradle.properties.
         ScorelineCommon.init(modContainer.getModInfo().getVersion().toString());
