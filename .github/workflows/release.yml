@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Version part to raise (ignored for the first release)
+        description: Version part to raise
         type: choice
         options: [patch, minor, major]
         default: patch
