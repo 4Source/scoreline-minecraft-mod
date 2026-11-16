@@ -11,6 +11,9 @@ neoForge {
     if (at.exists()) {
         accessTransformers.from(at.absolutePath)
     }
+    // ModDevGradle adds Minecraft and its libraries (Netty, ...) to the main source set only.
+    // The protocol tests and GoldenWriter encode payloads, so the test source set needs them too.
+    addModdingDependenciesTo(sourceSets.test)
 }
 
 dependencies {
@@ -101,4 +104,10 @@ def checkLogicPackages = tasks.register('checkLogicPackages') {
             throw new GradleException('Coverage gate: no classes match logicPackages')
         }
     }
+}
+
+tasks.register('generateGoldens', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'io.github.foursource.scoreline.net.GoldenWriter'
+    args layout.buildDirectory.dir('goldens').get().asFile.absolutePath
 }
