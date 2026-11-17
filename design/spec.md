@@ -885,7 +885,7 @@ All design questions are decided. These points can only be answered while buildi
 **To verify technically**
 
 - [ ] Whether the MultiLoader Template and NeoForge's game-test framework are ready for 26.3 (v0.1).
-- [ ] Minecraft's size limit for a single payload, against the 150 KB tile estimate (v0.2). The vanilla 26.3 code has 1,048,576 bytes to the client and 32,767 bytes to the server; what NeoForge and Fabric do with registered payloads is not verified.
+- [x] Minecraft's size limit for a single payload, against the 150 KB tile estimate (v0.2). The vanilla 26.3 code has 1,048,576 bytes to the client and 32,767 bytes to the server. NeoForge 26.3 splits larger registered payloads automatically (`GenericPacketSplitter`), but only when both sides run NeoForge. A 150 KB tile fits in one clientbound payload; requests to the server must stay under 32 KB. Fabric is checked when the Fabric build arrives (v0.9).
 - [ ] Tooling for the client startup check on NeoForge and Fabric (v0.3).
 - [ ] Whether the publishing action supports 26.x versions, and how long CurseForge's review takes (v0.3).
 - [ ] YACL 3.9.7 class and method names, and how YACL is referenced from the `common` module (v0.4).
