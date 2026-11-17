@@ -2,6 +2,7 @@ package io.github.foursource.scoreline;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.event.Level;
 
 import io.github.foursource.scoreline.platform.Services;
 
@@ -15,6 +16,14 @@ public final class ScorelineCommon {
      * The mod's logger, named after {@link Constants#MOD_NAME}.
      */
     public static final Logger LOG = LoggerFactory.getLogger(Constants.MOD_NAME);
+
+    /**
+     * Logs protocol traffic: at INFO in a development environment, so it shows in the dev console, and at DEBUG otherwise, so players' logs stay quiet.
+     */
+    public static void logProtocol(String format, Object... args) {
+        Level level = Services.PLATFORM.isDevelopmentEnvironment() ? Level.INFO : Level.DEBUG;
+        LOG.atLevel(level).log(format, args);
+    }
 
     private ScorelineCommon() {}
 
