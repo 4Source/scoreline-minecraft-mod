@@ -150,6 +150,15 @@ The client asks for data only while TAB is held, and the server answers only tha
 - A vanilla client on a modded server never sends requests, so nothing breaks.
 - Payloads are vanilla `CustomPacketPayload` classes with `StreamCodec`, defined once in `common`. Only their registration differs per loader.
 
+**Mixed mod versions**
+
+Only the server announces its protocol version; the server never learns the client's. So the client decides what is sent in both directions:
+
+- The server sends nothing unasked except the hello. Every other server message answers a client request.
+- The client uses only features that both its own protocol version and the server's announced one have.
+- A released payload's format never changes. A new shape is a new payload type. The only exception is the hello, which may grow by fields appended at its end; older clients skip them.
+- A later hello on the same connection replaces the earlier one: version and interval. It is not a TAB press, so it sends nothing by itself; while TAB is held, the next request is due one new interval after the last one. A hello with an invalid version is ignored and changes nothing.
+
 **By version**
 
 | Step | Hello payload carries | Request carries |
@@ -161,7 +170,7 @@ The client asks for data only while TAB is held, and the server answers only tha
 | v0.7 | Unchanged | Unchanged; answers come from the shared snapshot |
 | v0.8 | Stat modes, so the client offers only visible stats | Unchanged |
 
-The request format is the same from v0.2 on, and the hello payload starts with a protocol version, so later versions extend the protocol without breaking older clients.
+The request and response formats are the same from v0.2 on, and the hello payload starts with a protocol version, so later versions extend the protocol without breaking older clients (see Mixed mod versions).
 
 A vanilla stat's ID is Minecraft's own stat name, the one scoreboard objectives use: for example `minecraft.custom:minecraft.play_time` or `minecraft.mined:minecraft.diamond_ore`. `minecraft:play_time` alone is not unique, because it only names the value inside the stat type `minecraft:custom`. API stats use IDs such as `questmod:quests_completed`.
 
@@ -880,6 +889,7 @@ All design questions are decided. These points can only be answered while buildi
 - [ ] Tooling for the client startup check on NeoForge and Fabric (v0.3).
 - [ ] Whether the publishing action supports 26.x versions, and how long CurseForge's review takes (v0.3).
 - [ ] YACL 3.9.7 class and method names, and how YACL is referenced from the `common` module (v0.4).
+- [ ] What NeoForge fires on the client when a proxy (for example Velocity) moves the player to another backend server, and whether a modded-to-vanilla switch leaves the old hello in place, so the client keeps sending requests to a server without the mod (v0.4, when hellos start to repeat).
 - [ ] YACL button options that open the stat picker screen (v0.5).
 - [ ] `ServiceLoader` registration across separate mods on NeoForge and Fabric, with a small test mod (v0.6).
 - [ ] The hook for stat changes in 26.3 and its mapping names (v0.7).
