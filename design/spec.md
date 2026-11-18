@@ -748,7 +748,7 @@ Everything that decides something is tested by machine; only the thin layer that
 | Load test | The whole mod under a fixed workload, for example 50 mock players sending requests for a set time, compared with the old version | A game test with a JFR recording; compares the time inside Scoreline's JFR events, not the whole tick |
 | Mutation testing | Whether the tests check results, not only run lines: small changes to the code (`<` to `<=`, a removed call) must make a test fail | PIT on `common`, with its history so only changed code is tested again |
 | Fuzzing | Decoding of what clients send to the server: malformed input must be rejected, never throw unexpected exceptions or allocate without bound | Jazzer (`@FuzzTest`); found inputs are kept and run in every build |
-| Game tests, server side | The mod loads, hello is sent, a request gets the right answer, hidden stats are not sent, the request budget holds | Minecraft's game-test framework on a headless server with mock players |
+| Game tests, server side | The mod loads, hello is sent, a request gets the right answer, hidden stats are not sent, the request budget holds; a vanilla client gets no Scoreline message and still plays, and appears in modded clients' lists | Minecraft's game-test framework on a headless server with mock players; a mock player's connection can act as a modded or a vanilla client |
 | Smoke test | A dedicated server starts and stops cleanly with the mod | Build workflow |
 | Manual checklist | The drawing layer: TAB overlay, settings screen, stat picker, graph screen | Before each release, documented in the repository |
 | Real server | Behaviour with real players over days | The alpha builds on the modpack server, with the debug command for timings |
@@ -897,7 +897,7 @@ All design questions are decided. These points can only be answered while buildi
 - [ ] Whether the MultiLoader Template and NeoForge's game-test framework are ready for 26.3 (v0.1).
 - [x] Minecraft's size limit for a single payload, against the 150 KB tile estimate (v0.2). The vanilla 26.3 code has 1,048,576 bytes to the client and 32,767 bytes to the server. NeoForge 26.3 splits larger registered payloads automatically (`GenericPacketSplitter`), but only when both sides run NeoForge. A 150 KB tile fits in one clientbound payload; requests to the server must stay under 32 KB. Fabric is checked when the Fabric build arrives (v0.9).
 - [ ] spark's CurseForge project ID and a file for 26.3, and that ModDevGradle's `localRuntime` keeps it out of the published metadata (v0.2).
-- [ ] Whether game-test mock players can send Scoreline's payloads to the server, for the load test (v0.2).
+- [x] Whether game-test mock players can send Scoreline's payloads to the server, for the load test (v0.2). Not with Minecraft's own mock players: none of them has a connection with negotiated channels. A mock player whose `Connection` sits in a Netty `EmbeddedChannel` and is set up with NeoForge's `NetworkRegistry.configureMockConnection` before it joins can send and receive them, as Java objects without encoding. NeoForge's own `testframework` does the same.
 - [ ] Whether Jazzer runs with the vanilla classes on `common`'s test classpath (v0.2).
 - [ ] Tooling for the client startup check on NeoForge and Fabric (v0.3).
 - [ ] Whether the publishing action supports 26.x versions, and how long CurseForge's review takes (v0.3).
