@@ -19,7 +19,7 @@ Scoreline is a Minecraft mod that shows player statistics as extra columns in th
 | --- | --- | --- |
 | v0.1 | Skeleton | Empty mod that loads on NeoForge 26.3; the request budget as first tested logic; build workflow with unit tests, smoke test and coverage gate; release flow up to GitHub Releases |
 | v0.2 | Protocol | Hello payload, request and response for playtime and deaths; game tests; stored example messages; performance comparison between versions, mutation testing and fuzzing on pull requests; spark for local runs |
-| v0.3 | TAB overlay | Two fixed columns in the TAB list; client startup check; first CurseForge upload (alpha); docs site with install and player page |
+| v0.3 | TAB overlay | Two fixed columns in the TAB list; client startup check; first CurseForge upload (alpha); docs site with install, download and player page; NeoForge update check |
 | v0.4 | Settings | `ClientSettings` and `ServerSettings`, YACL settings screen, refresh interval, configuration reference |
 | v0.5 | Stat picker | Native stat picker, all stats selectable, four column slots |
 | v0.6 | Stats API | Stat providers, vanilla stats on the same interface, format presets, API jar, developer guide and Javadoc |
@@ -44,7 +44,7 @@ v0.1 to v0.9 build the TAB leaderboard for online players in small steps; v0.10 
 
 - **v0.1 Skeleton:** an empty mod that loads on NeoForge 26.3, with the build-and-test workflow and the release flow up to GitHub Releases. The request budget is built here as the first tested logic, so the tests and the coverage gate have something to measure.
 - **v0.2 Protocol:** hello payload, request and response. The server answers with playtime and deaths for online players. Each side falls back to vanilla behaviour if the other lacks the mod. From here on, the performance of the new code is compared with the old: allocation on every pull request, time nightly and before each release (see Testing), so later work on larger servers has a baseline to compare with.
-- **v0.3 TAB overlay:** the TAB list shows playtime and deaths, in vanilla order. First alpha upload to CurseForge. Docs site.
+- **v0.3 TAB overlay:** the TAB list shows playtime and deaths, in vanilla order. First alpha upload to CurseForge. Docs site with a download page. NeoForge tells players when a newer version exists (see Update check).
 - **v0.4 Settings:** settings layers, YACL settings screen, server setting for the refresh interval.
 - **v0.5 Stat picker:** up to four columns per player, chosen from all statistics (general, per-item, per-block, per-mob).
 - **v0.6 Stats API:** other mods can add stats; these are selectable like vanilla stats. Format presets with options. Separate API jar.
@@ -823,6 +823,7 @@ The build-and-test workflow runs them on every change, so a failing test blocks 
 4. **Build:** build the jars once, after the full test suite has passed.
 5. **Draft:** create a draft GitHub Release with this version's `CHANGELOG.md` section as its body and the jars attached.
 6. **Publish:** the upload to CurseForge (from v0.3) and to Modrinth (from v0.9) waits for the maintainer's approval.
+7. **Announce (from v0.3):** once the GitHub Release is published and the uploads are done, update `update.json` on the docs site (see Update check).
 
 - The version lives in `gradle.properties`; the build writes it into the mod metadata of each loader.
 - A dry-run option shows the next version and changelog without creating anything.
@@ -831,6 +832,16 @@ The build-and-test workflow runs them on every change, so a failing test blocks 
 - Store uploads use an existing action for mod uploads (for example `mc-publish`); its support for 26.x must be checked first. API tokens are stored as repository secrets.
 - Jar names follow `scoreline-<mod version>+<Minecraft version>-<loader>.jar`.
 - The `master` branch is protected: changes arrive by pull request, and the build workflow must pass.
+
+**Update check (from v0.3)**
+
+NeoForge checks for mod updates at game start: it reads the JSON file named by `updateJSONURL` in `neoforge.mods.toml` and marks the mod in the mods list when a newer version exists.
+
+- One `update.json` covers every supported Minecraft version. Its `promos` hold `<Minecraft version>-latest` (and from 1.0 `<Minecraft version>-recommended`), and one section per Minecraft version holds the changelog line of each release. A game reads only the entries for its own Minecraft version, so a fix for an older Minecraft version on a maintenance branch updates only that version's entries.
+- The file lives at the root of the docs site, outside the versioned docs, because it holds the state of all Minecraft versions while `master` knows only the newest one. Each release reads the current file, updates its own Minecraft version's entries and writes it back. The release workflow never runs twice at once, so two releases cannot overwrite each other.
+- It is updated only after the release is published (Release details, step 7), so it never announces a version players cannot download. The GitHub Release is available at once, also while a store upload is still in CurseForge's review.
+- Its `homepage` is the download page of the docs (see Documentation), not a store page, so players land on the docs and choose where to download.
+- Fabric has no built-in update check. From v0.9, Mod Menu finds updates of mods hosted on Modrinth by itself.
 
 **New Minecraft versions**
 
@@ -853,7 +864,7 @@ Until the public launch in v0.9, only the latest docs are published. Kept versio
 
 | Section | Content |
 | --- | --- |
-| Players | Installing, choosing TAB columns, the settings screen, hiding yourself, later the graph screen |
+| Players | Downloading, installing, choosing TAB columns, the settings screen, hiding yourself, later the graph screen |
 | Server admins | Installing; a configuration reference with every setting (what it does, allowed values, default, since which version, effect of changing it); stat modes with examples; commands; later storage sizing and retention |
 | Mod developers | Getting started (add the dependency, write a provider, register it, see it in the TAB list); concepts (counter and gauge, format presets); a complete example mod; compatibility policy; API reference |
 | Release information | Changelog; supported Minecraft and loader versions |
@@ -863,13 +874,15 @@ Until the public launch in v0.9, only the latest docs are published. Kept versio
 - The API reference is Javadoc generated by Gradle from the `api` module, published next to each docs version and linked from the developer pages.
 - The configuration reference is generated from the setting definitions in code, which also feed the settings screen. The build fails if the generated pages are out of date.
 - The release workflow deploys the docs for the released version.
+- The **download page** links to every place the mod can be downloaded from: CurseForge (from v0.3), Modrinth (from v0.9) and GitHub Releases. It lists the supported Minecraft versions with the newest Scoreline version for each. It has a fixed address that always shows the current page, because the update check's `homepage` points to it.
+- The install pages for players and admins say that NeoForge's update check contacts the docs site at every game start, and how to turn it off in NeoForge's own config.
 - The docs for a version are part of that version being done.
 
 **By version**
 
 | Step | Docs added |
 | --- | --- |
-| v0.3 | Site skeleton, install page, player page |
+| v0.3 | Site skeleton, install page, download page, player page, `update.json` |
 | v0.4 | Configuration reference |
 | v0.5 | Choosing columns with the stat picker |
 | v0.6 | Developer guide and Javadoc |
@@ -917,6 +930,8 @@ All design questions are decided. These points can only be answered while buildi
 - [ ] Whether Jazzer runs with the vanilla classes on `common`'s test classpath (v0.2).
 - [ ] Tooling for the client startup check on NeoForge and Fabric (v0.3).
 - [ ] Whether the publishing action supports 26.x versions, and how long CurseForge's review takes (v0.3).
+- [ ] The format NeoForge 26.3 expects for `update.json` (`promos` keys, changelog sections, `homepage`), and how its update check is switched off (v0.3).
+- [ ] How a page and a file at the docs site root, outside `mike`'s versioned folders, are deployed without being removed by the next docs deploy (v0.3).
 - [ ] YACL 3.9.7 class and method names, and how YACL is referenced from the `common` module (v0.4).
 - [ ] What NeoForge fires on the client when a proxy (for example Velocity) moves the player to another backend server, and whether a modded-to-vanilla switch leaves the old hello in place, so the client keeps sending requests to a server without the mod (v0.4, when hellos start to repeat).
 - [ ] YACL button options that open the stat picker screen (v0.5).
