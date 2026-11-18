@@ -18,7 +18,7 @@ Scoreline is a Minecraft mod that shows player statistics as extra columns in th
 | Step | Theme | Content |
 | --- | --- | --- |
 | v0.1 | Skeleton | Empty mod that loads on NeoForge 26.3; the request budget as first tested logic; build workflow with unit tests, smoke test and coverage gate; release flow up to GitHub Releases |
-| v0.2 | Protocol | Hello payload, request and response for playtime and deaths; game tests; stored example messages |
+| v0.2 | Protocol | Hello payload, request and response for playtime and deaths; game tests; stored example messages; performance comparison between versions, mutation testing and fuzzing on pull requests; spark for local runs |
 | v0.3 | TAB overlay | Two fixed columns in the TAB list; client startup check; first CurseForge upload (alpha); docs site with install and player page |
 | v0.4 | Settings | `ClientSettings` and `ServerSettings`, YACL settings screen, refresh interval, configuration reference |
 | v0.5 | Stat picker | Native stat picker, all stats selectable, four column slots |
@@ -43,7 +43,7 @@ v0.1 to v0.9 build the TAB leaderboard for online players in small steps; v0.10 
 **v0.1 to v0.9: the TAB leaderboard**
 
 - **v0.1 Skeleton:** an empty mod that loads on NeoForge 26.3, with the build-and-test workflow and the release flow up to GitHub Releases. The request budget is built here as the first tested logic, so the tests and the coverage gate have something to measure.
-- **v0.2 Protocol:** hello payload, request and response. The server answers with playtime and deaths for online players. Each side falls back to vanilla behaviour if the other lacks the mod.
+- **v0.2 Protocol:** hello payload, request and response. The server answers with playtime and deaths for online players. Each side falls back to vanilla behaviour if the other lacks the mod. From here on, every pull request compares the performance of the new code with the old (see Testing), so later work on larger servers has a baseline to compare with.
 - **v0.3 TAB overlay:** the TAB list shows playtime and deaths, in vanilla order. First alpha upload to CurseForge. Docs site.
 - **v0.4 Settings:** settings layers, YACL settings screen, server setting for the refresh interval.
 - **v0.5 Stat picker:** up to four columns per player, chosen from all statistics (general, per-item, per-block, per-mob).
@@ -618,7 +618,11 @@ The game's main thread only copies changed numbers once a minute; all other hist
 - **Graph requests:** handled off the main thread. Finished tiles are cached in encoded form.
 - **Join:** the player's stats are compared with their state file, which finds values that rose or fell while nothing was recording, and stats that are new in the recorded set. A respawn is not a join.
 - **Logout and shutdown:** final values are copied before a player object disappears, and the player's state file is rewritten; on server stop the buffer is flushed and the log closed.
-- **Measuring:** snapshot and write durations are logged, and a debug command shows queue size, cache size and timings. It also reports the storage figures per level that the v0.14 review needs (see Review of levels and tiles). The spark profiler is used during development; the target is that Scoreline is invisible in tick time.
+- **Measuring:** snapshot and write durations are logged, and a debug command shows queue size, cache size and timings. It also reports the storage figures per level that the v0.14 review needs (see Review of levels and tiles). The target is that Scoreline is invisible in tick time.
+- **Profiling tools:**
+  - **Java Flight Recorder (JFR):** built into the JDK, no dependency. Scoreline's own work is marked with JFR events (from v0.2), which cost close to nothing while no recording runs. The load test records with JFR, so the time spent inside Scoreline can be compared without the noise of the vanilla tick.
+  - **spark:** loaded only when Minecraft is started from this project (ModDevGradle's `localRuntime`, from CurseForge through CurseMaven). It is never a dependency of the published mod. It shows tick-based profiles in the game, and it is the format in which server admins send reports. Its CurseForge file ID is a property in `gradle.properties`; an empty value starts the runs without spark, so a missing spark build never blocks a Minecraft update.
+- **Storage figures (from v0.10):** bytes written, file count and write durations for a fixed workload join the performance comparison (see Testing). Sizes and counts are exact, so they are compared exactly rather than with timing limits.
 - **Larger servers later:** snapshot work can be spread over several ticks.
 
 ## Privacy (v0.8 for the TAB list, v0.13 for history)
@@ -740,7 +744,10 @@ Everything that decides something is tested by machine; only the thin layer that
 | Simulated time | Levels, retention and file sizes over a long period, checked against the estimates | A fake clock plays a year of server life in seconds |
 | Protocol compatibility | Today's code still reads the messages of every earlier protocol version | Stored example messages per version (golden files) |
 | Crash safety | Startup recovers everything before a broken log entry | The log file is cut off at every possible position |
-| Performance | Snapshot cost, tile serving, encoding speed stay within limits | Timed tests with thresholds |
+| Microbenchmarks | Time and allocated bytes per operation of the logic code (encoding, request rules, later snapshot, tiles and storage), compared with the old version | JMH with its allocation profiler (`-prof gc`) in `common` |
+| Load test | The whole mod under a fixed workload, for example 50 mock players sending requests for a set time, compared with the old version | A game test with a JFR recording; compares the time inside Scoreline's JFR events, not the whole tick |
+| Mutation testing | Whether the tests check results, not only run lines: small changes to the code (`<` to `<=`, a removed call) must make a test fail | PIT on `common`, with its history so only changed code is tested again |
+| Fuzzing | Decoding of what clients send to the server: malformed input must be rejected, never throw unexpected exceptions or allocate without bound | Jazzer (`@FuzzTest`); found inputs are kept and run in every build |
 | Game tests, server side | The mod loads, hello is sent, a request gets the right answer, hidden stats are not sent, the request budget holds | Minecraft's game-test framework on a headless server with mock players |
 | Smoke test | A dedicated server starts and stops cleanly with the mod | Build workflow |
 | Manual checklist | The drawing layer: TAB overlay, settings screen, stat picker, graph screen | Before each release, documented in the repository |
@@ -753,8 +760,9 @@ The individual test cases, including boundaries, invalid input and failure cases
 - Every test must pass before a change is merged.
 - Coverage gate on the logic code: at least 95% of lines and 90% of branches. Logic code is everything that decides something: encoding, levels, protocol, settings, layout decisions and the API.
 - The drawing layer and the loader glue are excluded from the gate, because by design they hold no logic.
-- Timing tests use generous limits, several times the expected value, because build machines vary by about 20% between runs. They catch real regressions; precise numbers come from the real server.
-- Slow tests (simulated year, exhaustive crash tests) run in the release workflow and nightly, not on every push.
+- Performance is compared, not measured against fixed numbers. Shared build machines are too noisy for numbers stored over months: one study measured 26% to 81% false alarms for naive regression checks in the cloud ([Laaber et al.](https://research.chalmers.se/en/publication/?id=511491)). Medians are stable, and two versions run side by side on the same machine compare well. So the performance job runs the old and the new version in the same job, alternating, and compares medians. The benchmarks stay runnable against any earlier tag, which is the baseline for later work.
+- The performance job fails only on a clear regression. The limits are set in the plan: generous for time, tighter for allocated bytes, which vary much less; storage sizes and counts are exact.
+- Slow and thorough checks (performance comparison, mutation testing, fuzzing, and from v0.10 the simulated year and exhaustive crash tests) run on every pull request and in the release workflow, not on a schedule: there is one pull request per version, so a schedule would mostly rerun unchanged code. Each also has a manual button.
 
 **New Minecraft versions: what the tests can and cannot tell**
 
@@ -772,17 +780,18 @@ The individual test cases, including boundaries, invalid input and failure cases
 
 ## GitHub setup: tests, releases, version checks
 
-Three GitHub Actions workflows cover the routine work: every change is built and tested, a release is started by hand with a version bump, and a daily job reports new Minecraft versions. The release flow follows the one used in the apihistory project.
+Four GitHub Actions workflows cover the routine work: every change is built and tested, every pull request gets the thorough checks, a release is started by hand with a version bump, and a daily job reports new Minecraft versions. The release flow follows the one used in the apihistory project.
 
 **Workflows**
 
 | Workflow | Runs when | What it does |
 | --- | --- | --- |
 | Build and test | Every push and pull request | Builds all loader modules, runs unit tests and game tests, starts a headless server and a client once with the mod, checks coverage, uploads the jars |
+| Thorough checks | Every pull request, plus a manual button with an optional baseline (a tag or commit; default: the pull request's base) | Runs the microbenchmarks and the load test for the baseline and the new code on the same machine and writes the comparison into the job summary; runs mutation testing and fuzzing for a fixed time per target; uploads the JMH results, JFR recordings and reports |
 | Release | Started by hand, with a dropdown: patch, minor or major | Prepares and merges a release pull request, tags it, builds once, drafts the GitHub Release; store uploads wait for approval |
-| Version check | Daily, plus a manual button | Compares the newest Minecraft release with the supported one and checks whether NeoForge, Fabric and YACL have builds for it |
+| Version check | Daily, plus a manual button | Compares the newest Minecraft release with the supported one and checks whether NeoForge, Fabric, YACL and spark have builds for it |
 
-By step: build and test and the release flow up to GitHub Releases exist from v0.1; game tests from v0.2; the client startup check and the CurseForge upload from v0.3; the Modrinth upload and the version check from v0.9.
+By step: build and test and the release flow up to GitHub Releases exist from v0.1; game tests and the thorough checks from v0.2; the client startup check and the CurseForge upload from v0.3; the Modrinth upload and the version check from v0.9.
 
 **Automated tests**
 
@@ -810,7 +819,8 @@ The build-and-test workflow runs them on every change, so a failing test blocks 
 **New Minecraft versions**
 
 1. The version check finds a new Minecraft release and opens an issue listing which dependencies are ready.
-2. Once NeoForge and YACL have builds, the workflow creates a branch with updated version numbers and runs the build.
+2. Once NeoForge and YACL have builds, the workflow creates a branch with updated version numbers and runs the build. The spark file ID is updated when spark has a build, and cleared otherwise; the issue says which, so spark is not forgotten.
+   Until the version check exists (v0.9), the spark file ID is part of the manual checklist for a Minecraft update.
 3. A green build becomes a pull request ready for review; a failed build is linked in the issue with its log.
 
 - `master` always targets the newest supported Minecraft version. Older versions get a maintenance branch only if needed.
@@ -886,6 +896,9 @@ All design questions are decided. These points can only be answered while buildi
 
 - [ ] Whether the MultiLoader Template and NeoForge's game-test framework are ready for 26.3 (v0.1).
 - [x] Minecraft's size limit for a single payload, against the 150 KB tile estimate (v0.2). The vanilla 26.3 code has 1,048,576 bytes to the client and 32,767 bytes to the server. NeoForge 26.3 splits larger registered payloads automatically (`GenericPacketSplitter`), but only when both sides run NeoForge. A 150 KB tile fits in one clientbound payload; requests to the server must stay under 32 KB. Fabric is checked when the Fabric build arrives (v0.9).
+- [ ] spark's CurseForge project ID and a file for 26.3, and that ModDevGradle's `localRuntime` keeps it out of the published metadata (v0.2).
+- [ ] Whether game-test mock players can send Scoreline's payloads to the server, for the load test (v0.2).
+- [ ] Whether Jazzer runs with the vanilla classes on `common`'s test classpath (v0.2).
 - [ ] Tooling for the client startup check on NeoForge and Fabric (v0.3).
 - [ ] Whether the publishing action supports 26.x versions, and how long CurseForge's review takes (v0.3).
 - [ ] YACL 3.9.7 class and method names, and how YACL is referenced from the `common` module (v0.4).
@@ -914,4 +927,6 @@ The design borrows from published work on time-series storage and interactive vi
 | [Thanos compactor documentation](https://github.com/thanos-io/thanos/blob/main/docs/components/compact.md) | Why tiles must not depend on other tiles when each level has its own retention |
 | *Designing Data-Intensive Applications* (Kleppmann) | Dictionary encoding, column layout, append-only logs |
 | *Java Concurrency in Practice* (Goetz) | One owner thread for the history data |
+| [Software Microbenchmarking in the Cloud. How Bad is it Really?](https://research.chalmers.se/en/publication/?id=511491) (Laaber, Scheuner and Leitner, EMSE 2019) | Comparing versions side by side on one machine instead of storing numbers over time |
+| [Coverage Is Not Strongly Correlated with Test Suite Effectiveness](https://doi.org/10.1145/2568225.2568271) (Inozemtseva and Holmes, ICSE 2014) | Mutation testing next to the coverage gate |
 | RRDtool | Several resolutions of the same data with retention |
