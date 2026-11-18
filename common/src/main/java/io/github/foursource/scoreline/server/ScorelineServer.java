@@ -61,25 +61,37 @@ public class ScorelineServer {
     /**
      * Decides what a player gets back for a stats request.
      * <p>
-     * Returns the payload instead of sending it, so game tests can check it; the caller sends it back to the requester.
+     * Returns the payload instead of sending it; the caller sends it back to the requester. A requester whose client lacks the response channel gets nothing: Scoreline's payloads are optional, so
+     * NeoForge accepts a request from any client, also from one that could not receive the response.
      *
      * @param requester the player who sent the request
      * @param ids the stat IDs in the request, in the order the client wants them
      * @param nowMillis the current time in milliseconds; passed in so the time source stays with the caller
-     * @return the response, with one row per online player and one value per admitted stat ID; empty if nothing is sent: the request was refused, or none of its IDs is known
+     * @return the response, with one row per online player and one value per admitted stat ID; empty if nothing is sent: the requester's client lacks the response channel, the request was refused, or
+     * none of its IDs is known
      */
     public Optional<StatsResponsePayload> onStatsRequest(ServerPlayer requester, List<String> ids, long nowMillis) {
         ScorelineCommon.logProtocol("Scoreline stats_request: requester={} now={}ms statIDs={}", requester.getUUID(), nowMillis, ids);
 
+        // A client without the channel cannot receive the response (a modified client: NeoForge lets
+        // optional payloads in from any client); answer nothing and spend none of its budget
+        if (!Services.NETWORK.hasChannel(requester, StatsResponsePayload.TYPE)) {
+            ScorelineCommon.logProtocol("Scoreline stats_request: requester={} now={}ms was rejected as the requester lacks the response channel", requester.getUUID(), nowMillis);
+            return Optional.empty();
+        }
+
         // Refused: the player has not joined, or their budget is used up
         Optional<List<String>> admitted = requestGate.admit(requester.getUUID(), ids, nowMillis);
         if (admitted.isEmpty()) {
+            ScorelineCommon.logProtocol("Scoreline stats_request: requester={} now={}ms was rejected as the requester is not on the server or has used up their budget", requester.getUUID(),
+                    nowMillis);
             return Optional.empty();
         }
 
         // Unknown IDs are ignored (spec, Networking); with none left there is nothing to answer
         List<String> statIds = admitted.get();
         if (statIds.isEmpty()) {
+            ScorelineCommon.logProtocol("Scoreline stats_request: requester={} now={}ms was rejected as none of the requested stat IDs is supported by the server", requester.getUUID(), nowMillis);
             return Optional.empty();
         }
 
