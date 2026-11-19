@@ -11,6 +11,9 @@ neoForge {
     if (at.exists()) {
         accessTransformers.from(at.absolutePath)
     }
+    // ModDevGradle adds Minecraft and its libraries (Netty, ...) to the main source set only.
+    // The protocol tests and GoldenWriter encode payloads, so the test source set needs them too.
+    addModdingDependenciesTo(sourceSets.test)
 }
 
 dependencies {
@@ -66,39 +69,81 @@ tasks.named('test') {
     useJUnitPlatform()
 }
 
-def logicPackages = ['io/github/foursource/scoreline/net/**']
+// Coverage gate: every class of main is measured, except the files listed here.
+// List single files only, never packages or name wildcards, so a new file is measured until someone decides otherwise.
+// Each entry says why unit tests cannot run the class. Paths are relative to the class output folder, without ".class".
+def coverageExcludes = [
+    // Needs a running client (Minecraft, the connection to the server)
+    'io/github/foursource/scoreline/client/ScorelineClient',
+    // Needs a running server; Task 6's game tests cover it, but they run in the game process, which JaCoCo does not measure
+    'io/github/foursource/scoreline/server/ScorelineServer',
+    // Loads the loader's implementations through ServiceLoader when the class loads; common's tests have none
+    'io/github/foursource/scoreline/platform/Services',
+    // Its default method getEnvironmentName counts as code; it only formats an answer of the loader
+    'io/github/foursource/scoreline/platform/services/IPlatformHelper',
+    // Start-up and logging only
+    'io/github/foursource/scoreline/ScorelineCommon',
+]
 
-// The compiled classes of main, filtered to the logic packages. A FileTree is lazy:
-// Gradle evaluates it only when a task runs, after compileJava has produced the classes.
-def logicClasses = files(sourceSets.main.output.classesDirs).asFileTree.matching {
-    include logicPackages
+// All compiled classes of main. A FileTree is lazy: Gradle evaluates it only when a task runs,
+// after compileJava has produced the classes.
+def mainClasses = files(sourceSets.main.output.classesDirs).asFileTree
+
+// Each listed file with its nested and anonymous classes (Name$1.class, Name$Inner.class); lambdas make no class files.
+def coverageExcludePatterns = coverageExcludes.collectMany { [it + '.class', it + '$*.class'] }
+
+// The classes the gate measures
+def measuredClasses = mainClasses.matching {
+    exclude coverageExcludePatterns
+}
+
+def checkCoverageClasses = tasks.register('checkCoverageClasses') {
+    dependsOn tasks.named('compileJava')
+    doLast {
+        // A gate that measures nothing would always pass (T-10)
+        if (measuredClasses.isEmpty()) {
+            throw new GradleException('Coverage gate: no classes left to measure')
+        }
+        // An entry for a renamed or deleted class excludes nothing; it must be removed, so the list stays true
+        def stale = coverageExcludes.findAll { name ->
+            mainClasses.matching { include name + '.class' }.isEmpty()
+        }
+        if (!stale.isEmpty()) {
+            throw new GradleException("Coverage gate: coverageExcludes lists classes that do not exist: ${stale.join(', ')}")
+        }
+    }
 }
 
 tasks.named('jacocoTestReport') {
-    classDirectories.setFrom(logicClasses)
+    classDirectories.setFrom(measuredClasses)
 }
 
 tasks.named('jacocoTestCoverageVerification') {
-    classDirectories.setFrom(logicClasses)
+    classDirectories.setFrom(measuredClasses)
     violationRules {
+        // The measured code as a whole (element BUNDLE, JaCoCo's default)
         rule {
+            limit { counter = 'LINE';   value = 'COVEREDRATIO'; minimum = 0.95 }
+            limit { counter = 'BRANCH'; value = 'COVEREDRATIO'; minimum = 0.90 }
+        }
+        // Each class on its own, so a small untested class cannot hide behind well-tested ones.
+        // A class without branches has no BRANCH ratio and passes that limit.
+        rule {
+            element = 'CLASS'
             limit { counter = 'LINE';   value = 'COVEREDRATIO'; minimum = 0.95 }
             limit { counter = 'BRANCH'; value = 'COVEREDRATIO'; minimum = 0.90 }
         }
     }
     dependsOn tasks.named('test')
-    dependsOn checkLogicPackages
+    dependsOn checkCoverageClasses
 }
 
 tasks.named('check') {
     dependsOn tasks.named('jacocoTestCoverageVerification'), tasks.named('jacocoTestReport')
 }
 
-def checkLogicPackages = tasks.register('checkLogicPackages') {
-    dependsOn tasks.named('compileJava')
-    doLast {
-        if (logicClasses.isEmpty()) {
-            throw new GradleException('Coverage gate: no classes match logicPackages')
-        }
-    }
+tasks.register('generateGoldens', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'io.github.foursource.scoreline.net.GoldenWriter'
+    args layout.buildDirectory.dir('goldens').get().asFile.absolutePath
 }

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Prints the next release version, without a leading v, for a patch, minor or major bump.
 #
-# With no v* tag, the version from gradle.properties is printed unchanged (the first release).
-# Otherwise the highest v* tag is raised by the chosen part. Fails if the tag or the release
+# No v* tag, is treated as error. The highest v* tag is raised by the chosen part. Fails if the tag or the release
 # branch of the result already exists, locally or on origin.
 set -euo pipefail
 
@@ -25,7 +24,8 @@ esac
 latest=$(git tag --list 'v*' --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
 
 if [ -z "$latest" ]; then
-    next=$(grep '^version=' gradle.properties | cut -d= -f2 | tr -d '\r')
+    echo "No release tag found; check out with all tags (fetch-depth: 0)" >&2
+    exit 1
 else
     IFS=. read -r major minor patch <<< "${latest#v}"
     case "$bump" in
