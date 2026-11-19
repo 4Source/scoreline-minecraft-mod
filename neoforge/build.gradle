@@ -51,8 +51,23 @@ neoForge {
     }
 }
 
+repositories {
+    exclusiveContent {
+        forRepository { maven { url = 'https://cursemaven.com' } }
+        filter { includeGroup 'curse.maven' }
+    }
+}
+
+configurations {
+    localRuntime
+    runtimeClasspath.extendsFrom localRuntime
+}
+
 dependencies {
     gametestImplementation sourceSets.main.output
+    if (spark_curseforge_file_id) {
+        localRuntime "curse.maven:spark-361579:${spark_curseforge_file_id}"
+    }
 }
 
 sourceSets.main.resources { srcDir 'src/generated/resources' }

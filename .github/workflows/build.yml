@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  ORG_GRADLE_PROJECT_spark_curseforge_file_id: ""
+
 jobs:
   build:
     runs-on: ubuntu-latest
