@@ -14,3 +14,5 @@ rootProject.name = 'scoreline-minecraft-mod'
 includeBuild('build-logic')
 include('common')
 include('neoforge')
+// Development tools (performance comparison); plain Java, never part of the mod
+include('tools')

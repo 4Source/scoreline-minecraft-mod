@@ -1,39 +1,27 @@
 #!/usr/bin/env bash
 # Prints the next release version, without a leading v, for a patch, minor or major bump.
 #
-# No v* tag, is treated as error. The highest v* tag is raised by the chosen part. Fails if the tag or the release
-# branch of the result already exists, locally or on origin.
+# The version arithmetic lives in tools (NextVersion, unit tested): the highest vX.Y.Z tag is raised by the chosen
+# part, and no such tag is an error. This script only reads the tags and checks with git that the result is not in use:
+# it fails if the tag or the release branch already exists, locally or on origin.
+# Needs a JDK 25 on the PATH: Java's source launcher runs NextVersionLauncher straight from the sources.
 set -euo pipefail
 
 # Go to the project root
 cd "$(dirname "$0")/.."
 
-usage() {
+if [ $# -ne 1 ]; then
     echo "Usage: scripts/next-version.sh <patch|minor|major>" >&2
     exit 1
-}
-
-[ $# -eq 1 ] || usage
-bump=$1
-case "$bump" in
-    patch | minor | major) ;;
-    *) usage ;;
-esac
-
-# Highest vX.Y.Z tag, compared as version numbers (v0.10.0 ranks above v0.9.0)
-latest=$(git tag --list 'v*' --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
-
-if [ -z "$latest" ]; then
-    echo "No release tag found; check out with all tags (fetch-depth: 0)" >&2
-    exit 1
-else
-    IFS=. read -r major minor patch <<< "${latest#v}"
-    case "$bump" in
-        major) next="$((major + 1)).0.0" ;;
-        minor) next="$major.$((minor + 1)).0" ;;
-        patch) next="$major.$minor.$((patch + 1))" ;;
-    esac
 fi
+
+launcher=tools/src/main/java/io/github/foursource/scoreline/tools/release/NextVersionLauncher.java
+
+# All v* tags, one argument each; NextVersion ignores those that are not vX.Y.Z
+mapfile -t tags < <(git tag --list 'v*')
+next=$(java "$launcher" "$1" "${tags[@]}")
+# A \r would make the checks below look for a tag that cannot exist
+next=${next%$'\r'}
 
 tag="v$next"
 branch="release/$tag"

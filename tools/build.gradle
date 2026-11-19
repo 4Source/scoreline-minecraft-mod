@@ -1,0 +1,70 @@
+// Development tools: the performance comparison and the release version. Plain Java, no Minecraft, no ModDevGradle.
+// Deliberately without the multiloader-* plugins: they would treat this module as part of the mod.
+// They decide whether a pull request or a release fails, so their coverage gate is stricter than common's.
+plugins {
+    id 'java'
+    id 'jacoco'
+    id 'scoreline-style'
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(java_version)
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation(libs.gson)
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testRuntimeOnly(libs.junit.platform.launcher)
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+// Coverage gate: 100% of lines and branches, in total and for each class. Only the launchers are left out: each only
+// calls System.exit with its tool's result, which a unit test cannot run.
+def launchers = ['**/PerfCompareLauncher.class', '**/NextVersionLauncher.class']
+def measured = files(sourceSets.main.output.classesDirs).asFileTree.matching { exclude launchers }
+
+tasks.named('jacocoTestReport') {
+    classDirectories.setFrom(measured)
+    // XML as well, so missed lines can be listed without a browser
+    reports { xml.required = true }
+}
+
+tasks.named('jacocoTestCoverageVerification') {
+    classDirectories.setFrom(measured)
+    violationRules {
+        rule {
+            limit { counter = 'LINE';   value = 'COVEREDRATIO'; minimum = 1.0 }
+            limit { counter = 'BRANCH'; value = 'COVEREDRATIO'; minimum = 1.0 }
+        }
+        rule {
+            element = 'CLASS'
+            limit { counter = 'LINE';   value = 'COVEREDRATIO'; minimum = 1.0 }
+            limit { counter = 'BRANCH'; value = 'COVEREDRATIO'; minimum = 1.0 }
+        }
+    }
+    dependsOn tasks.named('test')
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('jacocoTestCoverageVerification'), tasks.named('jacocoTestReport')
+}
+
+// Compares the rounds that scripts/compare-performance.sh copied into build/perf/{baseline,new}.
+// Prints a Markdown table; fails on a regression (exit 1 of PerfCompareMain) or on unreadable input (exit 2).
+// The script passes its options with --args (which replaces the default arguments); paths are relative to the root.
+tasks.register('comparePerformance', JavaExec) {
+    description = 'Compares the performance results in build/perf/baseline with those in build/perf/new.'
+    group = 'verification'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'io.github.foursource.scoreline.tools.perf.PerfCompareLauncher'
+    workingDir = rootProject.projectDir
+    args('build/perf/baseline', 'build/perf/new')
+}
