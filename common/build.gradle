@@ -2,6 +2,7 @@ plugins {
     id 'multiloader-common'
     id 'net.neoforged.moddev'
     id 'jacoco'
+    id 'me.champeau.jmh'
 }
 
 neoForge {
@@ -14,6 +15,7 @@ neoForge {
     // ModDevGradle adds Minecraft and its libraries (Netty, ...) to the main source set only.
     // The protocol tests and GoldenWriter encode payloads, so the test source set needs them too.
     addModdingDependenciesTo(sourceSets.test)
+    addModdingDependenciesTo(sourceSets.jmh)
 }
 
 dependencies {
@@ -146,4 +148,75 @@ tasks.register('generateGoldens', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'io.github.foursource.scoreline.net.GoldenWriter'
     args layout.buildDirectory.dir('goldens').get().asFile.absolutePath
+}
+
+// Settings of the timed benchmark run (./gradlew :common:jmh). compare-performance.sh passes its own options on JMH's
+// command line, so both versions of a comparison are measured alike whatever their build files say.
+jmh {
+    fork = 2                  // two fresh JVMs per benchmark: one JVM can differ from the next by a single JIT decision
+    warmupIterations = 3      // the JIT compiles hot code only after many calls; earlier timings measure the interpreter
+    iterations = 5            // measured iterations per fork; their spread shows the noise
+    warmup = '1s'
+    timeOnIteration = '1s'
+    benchmarkMode = ['avgt']  // average time per call, lower is better; the default (operations per second) reads the other way round
+    timeUnit = 'ns'
+    profilers = ['gc']        // adds gc.alloc.rate.norm: bytes allocated per call, nearly exact between runs
+    failOnError = true        // by default JMH logs a benchmark that throws, leaves it out of the results and still succeeds
+    resultFormat = 'JSON'     // read by PerfCompare
+    resultsFile = layout.buildDirectory.file('results/jmh/results.json')
+    zip64 = true              // the benchmark jar holds Minecraft and its libraries: more than 65,535 files, the plain zip limit
+}
+
+// Benchmark checks in every build: BenchmarksRunTest runs every benchmark once, so a broken one fails the build;
+// BenchmarkRuleTest reads the compiled classes and requires a benchmark for every measured method the hot paths reach.
+// Both have their own source set, so JUnit stays out of the benchmark jar.
+sourceSets {
+    jmhTest {
+        compileClasspath += sourceSets.jmh.output + sourceSets.jmh.compileClasspath
+        runtimeClasspath += sourceSets.jmh.output + sourceSets.jmh.runtimeClasspath
+        // The plugin generates JMH's harness classes and META-INF/BenchmarkList in tasks of its own, outside the
+        // jmh source set's output; the Runner needs both. files(task) also makes jmhTest depend on those tasks.
+        runtimeClasspath += files(tasks.named('jmhRunBytecodeGenerator'), tasks.named('jmhCompileGeneratedClasses'))
+    }
+}
+
+// The hot roots: methods the loader calls per tick or per network message, and the codecs of the registered payloads
+// (Class#STREAM_CODEC). Every measured method they reach must be reached by a benchmark too. A new hot path adds a line.
+def hotRoots = [
+    'io.github.foursource.scoreline.client.ScorelineClient#onTick',
+    'io.github.foursource.scoreline.client.ScorelineClient#onHello',
+    'io.github.foursource.scoreline.client.ScorelineClient#onStatsResponse',
+    'io.github.foursource.scoreline.server.ScorelineServer#onStatsRequest',
+    'io.github.foursource.scoreline.net.payload.HelloPayload#STREAM_CODEC',
+    'io.github.foursource.scoreline.net.payload.StatsRequestPayload#STREAM_CODEC',
+    'io.github.foursource.scoreline.net.payload.StatsResponsePayload#STREAM_CODEC',
+]
+
+dependencies {
+    jmhTestImplementation('org.ow2.asm:asm:9.8')
+    jmhTestImplementation(platform('org.junit:junit-bom:5.14.4'))
+    jmhTestImplementation('org.junit.jupiter:junit-jupiter')
+    jmhTestRuntimeOnly('org.junit.platform:junit-platform-launcher')
+}
+
+def jmhTest = tasks.register('jmhTest', Test) {
+    description = 'Runs every JMH benchmark once, in-process, and checks that the hot paths are benchmarked.'
+    group = 'verification'
+    testClassesDirs = sourceSets.jmhTest.output.classesDirs
+    classpath = sourceSets.jmhTest.runtimeClasspath
+    useJUnitPlatform()
+    // Minecraft's logging configuration writes logs/latest.log into the working directory; keep it out of the sources
+    def workDir = layout.buildDirectory.dir('jmhTest').get().asFile
+    workingDir = workDir
+    doFirst { workDir.mkdirs() }
+    // For BenchmarkRuleTest: where the compiled classes are, which classes are measured, and where the hot paths start
+    inputs.files(sourceSets.main.output.classesDirs)
+    systemProperty 'scoreline.mainClasses', sourceSets.main.output.classesDirs.asPath
+    systemProperty 'scoreline.benchmarkClasses', sourceSets.jmh.output.classesDirs.asPath
+    systemProperty 'scoreline.coverageExcludes', coverageExcludes.join(',')
+    systemProperty 'scoreline.hotRoots', hotRoots.join(',')
+}
+
+tasks.named('check') {
+    dependsOn jmhTest
 }
