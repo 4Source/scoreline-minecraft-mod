@@ -192,6 +192,19 @@ jobs:
       - name: Smoke run
         run: scripts/smoke.sh
 
+      # 50 mock players for 30 s must get every answer. The timings it prints are for reading only, never compared:
+      # tick time on a shared runner is too noisy for that
+      - name: Load run
+        run: ./gradlew :neoforge:runProfileServer
+
+      - name: Upload the load run's recording
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: load-run
+          path: neoforge/build/perf/profile.jfr
+          if-no-files-found: warn
+
       - name: Upload the jar
         uses: actions/upload-artifact@v7
         with:

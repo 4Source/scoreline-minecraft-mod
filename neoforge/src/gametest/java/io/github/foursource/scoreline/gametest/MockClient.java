@@ -144,6 +144,20 @@ public final class MockClient {
     }
 
     /**
+     * Returns the custom payloads of a type received since the last call, and forgets everything the server sent so far. For long tests, so the outbound queue does not grow without bound.
+     *
+     * @param <T> the payload type
+     * @param type the payload class to keep
+     * @return the payloads of that type, oldest first
+     */
+    public <T extends CustomPacketPayload> List<T> takeReceivedPayloads(Class<T> type) {
+        List<T> payloads = receivedPayloads(type);
+        // The queue holds packet objects, not buffers, so releasing them frees nothing but the queue
+        channel.releaseOutbound();
+        return payloads;
+    }
+
+    /**
      * Creates the listener that logs this client out when its test ends, passed or failed.
      *
      * @return the listener, for {@code GameTestInfo#addListener}

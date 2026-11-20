@@ -26,8 +26,15 @@ import net.neoforged.neoforge.registries.RegisterEvent;
  */
 @EventBusSubscriber(modid = Constants.MOD_ID)
 public final class GameTestRegistration {
-    /** All tests of all groups; a new group is one more entry here. */
-    private static final List<GameTestCase> TESTS = Stream.of(JoinTests.tests(), StatsRequestTests.tests(), VanillaBehaviorTests.tests()).flatMap(List::stream).toList();
+    /** Set to {@code true} by the profiling run ({@code runProfileServer}) only; then the load of {@link LoadTest} is the only test registered. */
+    static final String LOAD_TEST_PROPERTY = "scoreline.loadTest";
+
+    /**
+     * The tests of this run. Normally all groups (a new group is one more entry here). In the profiling run only {@link LoadTest}: other tests' requests would land in its timings, and the normal
+     * run's {@code --tests scoreline:*} cannot leave a test out, so the load is not registered there at all.
+     */
+    private static final List<GameTestCase> TESTS = Boolean.getBoolean(LOAD_TEST_PROPERTY) ? LoadTest.tests()
+            : Stream.of(JoinTests.tests(), StatsRequestTests.tests(), VanillaBehaviorTests.tests()).flatMap(List::stream).toList();
 
     private GameTestRegistration() {}
 

@@ -42,6 +42,19 @@ neoForge {
             sourceSet = sourceSets.gametest
             programArguments.addAll '--tests', 'scoreline:*'
         }
+        // // The manual profiling run: only LoadTest is registered, 50 mock players asking for 30 s. Java Flight
+        // Recorder's method timing (Java 25) counts and times the calls of Scoreline's server-side classes without any code in
+        // the mod; the table is printed when the server exits, and build/perf/profile.jfr opens in Java Mission Control.
+        // Started by hand, never in a check.
+        profileServer {
+            type = "gameTestServer"
+            gameDirectory = this.mkdir(this.file('runs/profile'))
+            sourceSet = sourceSets.gametest
+            systemProperty 'scoreline.loadTest', 'true'
+            programArguments.addAll '--tests', 'scoreline:t108_load_50_players'
+            def timed = ['server.ScorelineServer', 'net.RequestGate', 'net.RequestBudget'].collect { "${project.group}.${mod_id}.${it}" }.join(';')
+            jvmArgument "-XX:StartFlightRecording=filename=${this.file('build/perf/profile.jfr').absolutePath},method-timing=${timed},report-on-exit=method-timing,dumponexit=true"
+        }
     }
     mods {
         "${mod_id}" {
@@ -71,6 +84,12 @@ dependencies {
 }
 
 sourceSets.main.resources { srcDir 'src/generated/resources' }
+
+// JFR refuses to start (and the JVM with it) if the recording's folder does not exist
+tasks.named('runProfileServer') {
+    def perfDir = file('build/perf')
+    doFirst { perfDir.mkdirs() }
+}
 
 // Implement mcgradleconventions loader attribute
 def loaderAttribute = Attribute.of('io.github.mcgradleconventions.loader', String)
