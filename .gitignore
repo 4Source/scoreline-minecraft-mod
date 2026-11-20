@@ -30,3 +30,6 @@ runs
 # claude (local-only)
 CLAUDE.md
 .claude/
+
+# Jazzer's generated corpus (found crashing inputs go to src/test/resources and are committed)
+.cifuzz-corpus/

@@ -2,12 +2,14 @@ package io.github.foursource.scoreline.net.payload;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import io.github.foursource.scoreline.net.Protocol;
@@ -108,8 +110,20 @@ public class StatsRequestPayloadTest {
 
         int bytes = Wire.encode(Identifier.STREAM_CODEC, request.type().id()).length + Wire.encode(StatsRequestPayload.STREAM_CODEC, request).length;
 
-        Assertions.assertTrue(bytes < MAX_SERVERBOUND_BYTES, bytes + " bytes");
+        assertTrue(bytes < MAX_SERVERBOUND_BYTES, bytes + " bytes");
         // The decoder accepts it: it is legal
         assertEquals(request, Wire.decode(StatsRequestPayload.STREAM_CODEC, Wire.encode(StatsRequestPayload.STREAM_CODEC, request)));
+    }
+
+    /**
+     * Bug: the decoder allocates a list of the announced size before checking the limit, so one packet takes the server's memory
+     */
+    @Test
+    void t110_hugeAnnouncedCountFailsFast() {
+        // VarInt Integer.MAX_VALUE: FF FF FF FF 07, then nothing
+        byte[] bytes = { (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, 0x07 };
+
+        assertTimeoutPreemptively(Duration.ofMillis(100),
+                () -> Throws.withMessage(DecoderException.class, String.valueOf(Integer.MAX_VALUE), () -> Wire.decode(StatsRequestPayload.STREAM_CODEC, bytes)));
     }
 }

@@ -4,4 +4,6 @@ plugins {
     // The JMH plugin for common's benchmarks. Declared here, not in common: a version in a subproject gives it a plugin
     // classloader of its own, and Spotless's shared build service then clashes between common and neoforge.
     alias(libs.plugins.jmh) apply false
+    // Mutation testing in common and tools, declared here for the same reason
+    alias(libs.plugins.pitest) apply false
 }

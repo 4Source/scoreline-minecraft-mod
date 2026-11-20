@@ -100,6 +100,9 @@ public class PerfCompareTest {
         Row fromExactZero = compareOne(allocation(0.0), allocation(0.0));
         assertEquals(Verdict.OK, fromExactZero.verdict());
         assertTrue(Double.isNaN(fromExactZero.ratio()));
+
+        // Exactly 1 byte is no longer "zero": the normal limits apply
+        assertEquals(Verdict.OK, compareOne(allocation(1.0), allocation(8.0)).verdict());
     }
 
     /**
@@ -110,6 +113,8 @@ public class PerfCompareTest {
         Row row = compareOne(time(300.0, 300.0, 300.0), time(199.0, 199.0, 199.0));
 
         assertEquals(Verdict.IMPROVED, row.verdict());
+        // Exactly the baseline ÷ 1.5 is not yet an improvement
+        assertEquals(Verdict.OK, compareOne(time(300.0), time(200.0)).verdict());
     }
 
     /**

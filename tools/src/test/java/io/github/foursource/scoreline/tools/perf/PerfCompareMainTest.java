@@ -87,6 +87,7 @@ public class PerfCompareMainTest {
 
         assertEquals(PerfCompareMain.OK, run());
         assertTrue(out().contains("IMPROVED"), out());
+        assertTrue(out().contains("2 metrics, 0 failing, 1 improved"), out());
     }
 
     /**
@@ -112,6 +113,8 @@ public class PerfCompareMainTest {
 
         assertEquals(PerfCompareMain.OK, run("--fallback"));
         assertTrue(out().startsWith("The new benchmarks do not compile against the baseline"), out());
+        // A blank line between the sentence and the table, or Markdown joins them
+        assertEquals("", out().lines().toList().get(1), out());
         assertTrue(out().contains("| REMOVED (each version ran its own benchmarks) |"), out());
     }
 
@@ -142,6 +145,11 @@ public class PerfCompareMainTest {
         assertTrue(out().contains("ProtocolBenchmark.a (time)"), out());
         assertTrue(out().contains("ProtocolBenchmark.b (allocation)"), out());
         assertTrue(out().contains("4 metrics, 1 failing, 0 improved"), out());
+        // The Markdown table's header and separator lines, and a blank line before the summary, or the table does not render
+        List<String> lines = out().lines().toList();
+        assertEquals("| Metric | Unit | Baseline | New | Ratio | Verdict |", lines.get(0));
+        assertEquals("| --- | --- | ---: | ---: | ---: | --- |", lines.get(1));
+        assertEquals("", lines.get(lines.size() - 2), out());
     }
 
     /**
@@ -252,6 +260,13 @@ public class PerfCompareMainTest {
         assertEquals(PerfCompareMain.OK, run("--accepted", accepted.toString()));
         assertTrue(out().contains("| ACCEPTED (the hello grew) |"), out());
         assertTrue(out().contains("accepted but not needed: ProtocolBenchmark.b (time)"), out());
+
+        // The reason starts right after the tab, and a one-character key is a key: the boundaries of the line format
+        Files.writeString(accepted, "ProtocolBenchmark.a (time)\tthe hello grew\nx\tone letter\n");
+        out.reset();
+        assertEquals(PerfCompareMain.OK, run("--accepted", accepted.toString()));
+        assertTrue(out().contains("| ACCEPTED (the hello grew) |"), out());
+        assertTrue(out().contains("accepted but not needed: x"), out());
 
         jmh(current, 1, "ProtocolBenchmark.a", 300, 100, "ProtocolBenchmark.b", 100, 100, "ProtocolBenchmark.c", 300, 100);
         assertEquals(PerfCompareMain.REGRESSION, run("--accepted", accepted.toString()));

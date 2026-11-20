@@ -3,6 +3,7 @@ plugins {
     id 'net.neoforged.moddev'
     id 'jacoco'
     id 'me.champeau.jmh'
+    id 'info.solidsoft.pitest'
 }
 
 neoForge {
@@ -27,6 +28,8 @@ dependencies {
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly(libs.junit.platform.launcher)
+    // Fuzzing of the payload decoders: in a normal test run Jazzer only replays the saved inputs
+    testImplementation(libs.jazzer.junit)
 }
 
 configurations {
@@ -66,6 +69,14 @@ sourceSets.configureEach {
 
 tasks.named('test') {
     useJUnitPlatform()
+    // Jazzer's lists are separated like a class path: ';' on Windows, ':' elsewhere
+    def jazzerIncludes = ['io.github.foursource.scoreline.**', 'net.minecraft.network.**'].join(File.pathSeparator)
+    // Jazzer instruments only the decoding code it should explore: Scoreline's and the vanilla codecs it uses.
+    // With JAZZER_FUZZ=1 in the environment it generates new input, for only the first fuzz test of a run.
+    systemProperty 'jazzer.instrumentation_includes', jazzerIncludes
+    systemProperty 'jazzer.custom_hook_includes', jazzerIncludes
+    // Jazzer attaches its agent while the tests run; JDK 25 still allows that, with a warning, and will disallow it by default later
+    jvmArgs '-XX:+EnableDynamicAgentLoading'
 }
 
 // Coverage gate: every class of main is measured, except the files listed here.
@@ -216,4 +227,22 @@ def jmhTest = tasks.register('jmhTest', Test) {
 
 tasks.named('check') {
     dependsOn jmhTest
+}
+
+// Mutation testing: PIT changes the measured classes in small ways and checks that a unit test notices.
+// Not part of check: it takes about a minute, so it runs where logic code changed and before a release.
+// Every run tests all mutants (open-source PIT keeps no history). The same exclusions as the coverage gate, so the two never disagree.
+pitest {
+    pitestVersion = libs.versions.pitest.core.get()
+    junit5PluginVersion = libs.versions.pitest.junit5.get()
+    targetClasses = ['io.github.foursource.scoreline.*']
+    excludedClasses = coverageExcludes.collectMany { [it.replace('/', '.'), it.replace('/', '.') + '$*'] }
+    targetTests = ['io.github.foursource.scoreline.*']
+    // Fuzz tests replay saved inputs only; they add nothing to the mutation score but time
+    excludedTestClasses = ['*FuzzTest']
+    enableDefaultIncrementalAnalysis = false
+    outputFormats = ['HTML', 'XML']
+    timestampedReports = false
+    threads = 4
+    mutationThreshold = 95   // the first run's score (98 %) rounded down to the next 5 %; only equivalent mutants survive
 }

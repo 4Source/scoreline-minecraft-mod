@@ -5,6 +5,7 @@ plugins {
     id 'java'
     id 'jacoco'
     id 'scoreline-style'
+    id 'info.solidsoft.pitest'
 }
 
 java {
@@ -67,4 +68,19 @@ tasks.register('comparePerformance', JavaExec) {
     mainClass = 'io.github.foursource.scoreline.tools.perf.PerfCompareLauncher'
     workingDir = rootProject.projectDir
     args('build/perf/baseline', 'build/perf/new')
+}
+
+// Mutation testing, like common's: tools decides whether a pull request or a release fails, and its limits are exactly
+// the < against <= bugs mutation testing finds. The launchers are left out, as in the coverage gate.
+pitest {
+    pitestVersion = libs.versions.pitest.core.get()
+    junit5PluginVersion = libs.versions.pitest.junit5.get()
+    targetClasses = ['io.github.foursource.scoreline.tools.*']
+    excludedClasses = ['io.github.foursource.scoreline.tools.perf.PerfCompareLauncher', 'io.github.foursource.scoreline.tools.release.NextVersionLauncher']
+    targetTests = ['io.github.foursource.scoreline.tools.*']
+    enableDefaultIncrementalAnalysis = false
+    outputFormats = ['HTML', 'XML']
+    timestampedReports = false
+    threads = 4
+    mutationThreshold = 95   // the first run's score (99 %) rounded down to the next 5 %; only equivalent mutants survive
 }
