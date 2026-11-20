@@ -144,3 +144,50 @@ tasks.named('runGameTestServer') {
     doFirst { gameTestExec.get().asFile.delete() }
     finalizedBy gameTestCoverageReport
 }
+
+// Jar check: opens the built jar and fails, naming what it found, unless the metadata carries the version
+// from gradle.properties and no unfilled placeholder, every service registration names a class in the jar, and no
+// game-test or spark class is packed. Seconds, without starting Minecraft; the smoke test then starts the jar.
+def checkJar = tasks.register('checkJar') {
+    description = 'Checks the contents of the built mod jar.'
+    group = 'verification'
+    def jarFile = tasks.named('jar').flatMap { it.archiveFile }
+    def expectedVersion = project.version.toString()
+    inputs.file(jarFile)
+    doLast {
+        def problems = []
+        new java.util.zip.ZipFile(jarFile.get().asFile).withCloseable { zip ->
+            def names = zip.entries().collect { it.name } as Set
+            def toml = zip.getEntry('META-INF/neoforge.mods.toml')
+            if (toml == null) {
+                problems << 'META-INF/neoforge.mods.toml is missing'
+            } else {
+                def text = zip.getInputStream(toml).getText('UTF-8')
+                if (text.contains('${')) {
+                    problems << "META-INF/neoforge.mods.toml has an unfilled placeholder: ${text.find(/\$\{[^}]*\}/)}"
+                }
+                if (!text.contains("version = \"${expectedVersion}\"") && !text.contains("version=\"${expectedVersion}\"")) {
+                    problems << "META-INF/neoforge.mods.toml does not carry the version ${expectedVersion}"
+                }
+            }
+            def services = names.findAll { it.startsWith('META-INF/services/') && !it.endsWith('/') }
+            if (services.isEmpty()) {
+                problems << 'META-INF/services/ holds no service registration'
+            }
+            services.each { service ->
+                zip.getInputStream(zip.getEntry(service)).getText('UTF-8').readLines()*.trim().findAll { it && !it.startsWith('#') }.each { impl ->
+                    if (!names.contains(impl.replace('.', '/') + '.class')) {
+                        problems << "${service} names ${impl}, which is not in the jar"
+                    }
+                }
+            }
+            names.findAll { it.startsWith('io/github/foursource/scoreline/gametest/') || it.startsWith('me/lucko/') }.each {
+                problems << "${it} must not be in the mod jar"
+            }
+        }
+        if (!problems.isEmpty()) {
+            throw new GradleException("Jar check failed for ${jarFile.get().asFile.name}:\n  " + problems.join('\n  '))
+        }
+    }
+}
+tasks.named('check') { dependsOn checkJar }

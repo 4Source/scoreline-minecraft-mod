@@ -51,8 +51,9 @@ jobs:
       - name: Build
         run: ./gradlew build
 
-      - name: Smoke run
-        run: scripts/smoke.sh
+      # A failing game test makes the run exit non-zero; the smoke test with the built jar runs nightly and before a release
+      - name: Game tests
+        run: ./gradlew :neoforge:runGameTestServer
 
       - name: Upload jars
         uses: actions/upload-artifact@v7
@@ -69,3 +70,4 @@ jobs:
           path: |
             common/build/reports
             neoforge/runs/gametest/logs
+            neoforge/build/reports/jacoco/gameTestCoverageReport
