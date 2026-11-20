@@ -733,8 +733,8 @@ Everything that decides something is tested by machine; only the thin layer that
 **Splitting drawing from deciding**
 
 - All layout and interaction decisions are computed in plain code that returns what to draw and where: column widths, shortened names, which lines are highlighted, which tiles to request, what the hover box lists.
-- That code is unit tested. The layer that actually draws only executes those results and goes on the manual checklist.
-- Two alternatives were rejected: testing logic only (layout bugs are found late), and starting a real client in the build to compare screenshots (slow, fails for unrelated reasons, tool support differs between loaders).
+- That code is unit tested. The layer that actually draws only executes those results; a person checks it on the screenshots the client startup check attaches to the pull request (see Testing).
+- Two alternatives were rejected: testing logic only (layout bugs are found late), and comparing screenshots automatically against stored ones (fails for unrelated reasons such as a new font or graphics driver, and tool support differs between loaders). The screenshots are for a person to look at, not compared.
 
 **Kinds of tests**
 
@@ -752,9 +752,8 @@ Everything that decides something is tested by machine; only the thin layer that
 | Jar check | The published jar is complete: version filled in, service registrations present, no test classes, no spark | Opens the built jar in the build, without starting Minecraft |
 | Smoke test | A dedicated server starts with the **built jar**, logs Scoreline's version and stops cleanly | A dedicated server with the jar in its mods folder, stopped with `stop` |
 | Load run | 50 mock players, each asking every 2 seconds for 30 seconds, get every answer: the request budget never refuses a client that follows the protocol, and nothing is dropped under sustained load. Correctness only: its timings are uploaded for reading, never compared | The manual profiling run's load on a headless server, nightly and before a release |
-| Client startup check (from v0.3) | The built jar loads in a real client with the right version, and all client hooks attach | A real client started once and quit; see New Minecraft versions |
-| Manual runs | Speed under load: the load run started by hand, with Java Flight Recorder's method timing read by a person. Storage volume (from v0.10): 50 always-online players for a year on real files, reporting bytes, file counts and the time of writing, packing and deleting | Started by hand, as the release checklist says; never a gate |
-| Manual checklist | The drawing layer: TAB overlay, settings screen, stat picker, graph screen; until the client startup check exists, the in-game check that a client gets the stats; when each manual run is due | Before each release, documented in the repository |
+| Client startup check (from v0.3) | The built jar loads in a real client with the right version, and all client hooks attach. It also takes screenshots of the drawing layer (the TAB list with several players, the settings screen, later the stat picker and the graph screen) and attaches them to the pull request | A real client on a virtual display, started once and quit; see New Minecraft versions |
+| Manual runs | Speed under load: the load run started by hand, with Java Flight Recorder's method timing read by a person. Storage volume (from v0.10): 50 always-online players for a year on real files, reporting bytes, file counts and the time of writing, packing and deleting | Started by hand when a change makes them worth it; never a gate |
 | Real server | Behaviour with real players over days | The alpha builds on the modpack server, with the debug command for timings |
 
 A load test that times the whole mod every night was considered and left out; the load run above checks only that every request is answered. Load testing looks for problems that only appear under load ([Jiang and Hassan](https://www.eecs.yorku.ca/~zmjiang/publications/tse2015_jiang.pdf)): wrong results, leaks, broken overload handling, and slowness. The first three are exact and are covered by the unit, game and simulation tests and the load run above. Tick time on shared build machines varies too much to show Scoreline's small share ([Meterstick](https://www.arxiv.org/abs/2112.06963)), so speed under load is checked by hand.
@@ -774,10 +773,10 @@ The individual test cases, including boundaries, invalid input and failure cases
 - The performance comparison is split by how much each signal costs to measure well:
   - **Allocated bytes on every pull request**, blocking. They are nearly exact, so one short round is enough, and a pull request waits only a few minutes. A regression is measured once more before it fails the pull request, because a single JVM can differ by one compiler decision.
   - **Time nightly on `master`**, only if `master` changed since the last nightly run; the baseline is the commit that run checked. Nobody waits for it, so it runs enough forks and rounds for stable medians. A regression opens an issue naming the commits in between.
-  - **Everything before a release**, compared with the previous release, blocking. A feature may make existing work slower on purpose: such a regression is accepted by listing the metric and the reason in the release pull request, so it is a decision, not an accident, and the changelog notes it.
+  - **Everything before a release**, compared with the previous release, blocking. A feature may make existing work slower on purpose: such a regression is accepted by listing the metric and the reason in a file, in the pull request that causes it, so it is a decision, not an accident. Every comparison reads the list (pull request, nightly, release), the changelog notes it, and the release starts the next list empty.
 - Storage sizes are exact: the simulation's correctness run checks them on every pull request that touches history code, so a format change that makes the files larger is a decision too.
 - The slower checks run where their code changed: mutation testing on pull requests that change logic code, fuzzing on pull requests that change payload code, and from v0.10 the simulation on pull requests that change history code. The release workflow runs all of them, with every crash position and fuzzing for its full time. The saved fuzzing inputs run in every build. Each check also has a manual button.
-- The smoke test, the load run and, from v0.3, the client startup check run nightly, before a release and on the pull request the version check opens for a new Minecraft version. The jar check runs in every build.
+- The smoke test, the load run and, from v0.3, the client startup check run nightly, before a release and on the pull request the version check opens for a new Minecraft version. The client startup check also runs on pull requests that change the drawing code, so their screenshots are there to look at. The jar check runs in every build.
 - Before a release that changed a stored example message, the golden test of one earlier release per protocol version of the current major version reads today's messages (from v1.0; see Mixed mod versions). That release's own test is used, so the check runs the code players actually have.
 - The released example messages never change: the build fails if a protocol version folder differs from a release that contains it.
 
@@ -788,12 +787,12 @@ The individual test cases, including boundaries, invalid input and failure cases
 | Renamed or changed game code that Scoreline calls | The build on the new version | The version-check pull request fails with the compile error |
 | Code that a hook (mixin) attaches to | Smoke test and client startup check, both with the built jar | The game stops at startup, because all hooks are configured to fail hard instead of being skipped |
 | Behaviour on the server | Game tests, including tests that pin down the vanilla behaviour Scoreline relies on, for example "a mock player's death raises the deaths stat by one and the change hook sees it" | A failing game test |
-| The look or layout of the TAB list or screens | Nothing automatic | The manual checklist, a few minutes in a test world |
+| The look or layout of the TAB list or screens | Nothing automatic | The screenshots of the client startup check, which a person looks at before merging |
 
 - The unit tests in `common` do not touch Minecraft and say nothing about compatibility.
-- The client startup check starts a real client once with the built jar, just far enough to confirm that Scoreline loaded with the right version and all client hooks attach, then quits. Nothing is compared. How it runs on a build machine (a virtual display, or a lighter launch if NeoForge offers one) is decided in v0.3.
+- The client startup check starts a real client once with the built jar, just far enough to confirm that Scoreline loaded with the right version and all client hooks attach, takes the screenshots, then quits. Nothing is compared automatically: on a new Minecraft or YACL version, and when the drawing code changed, a person looks at the screenshots in the pull request before merging. How it runs on a build machine (a virtual display, or a lighter launch if NeoForge offers one) is decided in v0.3.
 - Each mod file declares the Minecraft line it supports, for example 26.3.x. Patch versions need nothing; a new line such as 26.4 always needs a new release.
-- Green pull request: run the visual checklist and press release, no code changes. Red pull request: the log shows what broke.
+- Green pull request: look at the screenshots and press release, no code changes. Red pull request: the log shows what broke.
 
 ## GitHub setup: tests, releases, version checks
 
@@ -804,7 +803,7 @@ Four GitHub Actions workflows cover the routine work: every change is built and 
 | Workflow | Runs when | What it does |
 | --- | --- | --- |
 | Build and test | Every push and pull request | Builds all loader modules, runs unit tests, the saved fuzzing inputs and game tests, checks coverage and the jar's contents, uploads the jars |
-| Thorough checks | Every pull request; nightly on `master` if it changed since the last nightly run; plus a manual button with an optional baseline (a tag or commit) | On a pull request: compares the allocated bytes of the microbenchmarks with the pull request's base, and runs mutation testing, fuzzing and (from v0.10) the simulation where their code changed. Nightly: compares time and allocation of the microbenchmarks for the last checked commit and `master` on the same machine, runs the smoke test with the built jar, the load run and (from v0.3) the client startup check, and opens an issue on a failure. Writes the comparison into the job summary and uploads the JMH results and reports |
+| Thorough checks | Every pull request; nightly on `master` if it changed since the last nightly run; plus a manual button with an optional baseline (a tag or commit) | On a pull request: compares the allocated bytes of the microbenchmarks with the pull request's base, and runs mutation testing, fuzzing, (from v0.3) the client startup check with its screenshots and (from v0.10) the simulation where their code changed. Nightly: compares time and allocation of the microbenchmarks for the last checked commit and `master` on the same machine, runs the smoke test with the built jar, the load run and (from v0.3) the client startup check, and opens an issue on a failure. Writes the comparison into the job summary and uploads the JMH results and reports |
 | Release | Started by hand, with a dropdown: patch, minor or major | Prepares and merges a release pull request, tags it, builds once, drafts the GitHub Release; store uploads wait for approval |
 | Version check | Daily, plus a manual button | Compares the newest Minecraft release with the supported one and checks whether NeoForge, Fabric, YACL and spark have builds for it |
 
@@ -837,7 +836,7 @@ The build-and-test workflow runs them on every change, so a failing test blocks 
 
 1. The version check finds a new Minecraft release and opens an issue listing which dependencies are ready.
 2. Once NeoForge and YACL have builds, the workflow creates a branch with updated version numbers and runs the build. The spark file ID is updated when spark has a build, and cleared otherwise; the issue says which, so spark is not forgotten.
-   Until the version check exists (v0.9), the spark file ID is part of the manual checklist for a Minecraft update.
+   Until the version check exists (v0.9), the spark file ID is updated by hand with a Minecraft update.
 3. A green build becomes a pull request ready for review; a failed build is linked in the issue with its log.
 
 - `master` always targets the newest supported Minecraft version. Older versions get a maintenance branch only if needed.
