@@ -33,8 +33,8 @@ import net.neoforged.neoforge.network.registration.NetworkRegistry;
  * {@link EmbeddedChannel} instead of a socket: what the server sends stays in the channel's outbound queue as packet objects, where {@link #receivedPayloads} reads it. Payloads are never encoded to
  * bytes, so the codecs are not tested here (the unit tests and golden files cover them).
  * <p>
- * Minecraft's own mock players do not fit: none of them has a connection whose channels are set up (see Task 6 in the v0.2 plan). This follows NeoForge's own test framework
- * ({@code ExtendedGameTestHelper.makeTickingMockServerPlayerInLevel}).
+ * Minecraft's own mock players do not fit: none of them has a connection whose channels are set up, so they can neither send nor receive Scoreline's payloads. This follows NeoForge's own test
+ * framework ({@code ExtendedGameTestHelper.makeTickingMockServerPlayerInLevel}).
  * <p>
  * Each client logs out when its test ends, so it does not show up in later tests' responses.
  */
@@ -43,7 +43,10 @@ public final class MockClient {
     public enum Kind {
         /** A client with NeoForge and Scoreline: all registered channels are set up. */
         MODDED,
-        /** A client without mods: no channels, as NeoForge marks a real vanilla client. A modded client whose channel version does not match ends up the same way. */
+        /**
+         * A client without mods: no channels, as NeoForge marks a real vanilla client. A modded client whose Scoreline channel version differs never gets this far: NeoForge's negotiation fails on a
+         * version mismatch even for optional channels, so the client cannot connect.
+         */
         VANILLA
     }
 
