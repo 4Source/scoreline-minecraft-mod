@@ -43,7 +43,7 @@ v0.1 to v0.9 build the TAB leaderboard for online players in small steps; v0.10 
 **v0.1 to v0.9: the TAB leaderboard**
 
 - **v0.1 Skeleton:** an empty mod that loads on NeoForge 26.3, with the build-and-test workflow and the release flow up to GitHub Releases. The request budget is built here as the first tested logic, so the tests and the coverage gate have something to measure.
-- **v0.2 Protocol:** hello payload, request and response. The server answers with playtime and deaths for online players. Each side falls back to vanilla behaviour if the other lacks the mod. From here on, every pull request compares the performance of the new code with the old (see Testing), so later work on larger servers has a baseline to compare with.
+- **v0.2 Protocol:** hello payload, request and response. The server answers with playtime and deaths for online players. Each side falls back to vanilla behaviour if the other lacks the mod. From here on, the performance of the new code is compared with the old: allocation on every pull request, time nightly and before each release (see Testing), so later work on larger servers has a baseline to compare with.
 - **v0.3 TAB overlay:** the TAB list shows playtime and deaths, in vanilla order. First alpha upload to CurseForge. Docs site.
 - **v0.4 Settings:** settings layers, YACL settings screen, server setting for the refresh interval.
 - **v0.5 Stat picker:** up to four columns per player, chosen from all statistics (general, per-item, per-block, per-mob).
@@ -158,6 +158,7 @@ Only the server announces its protocol version; the server never learns the clie
 - The client uses only features that both its own protocol version and the server's announced one have.
 - A released payload's format never changes. A new shape is a new payload type. The only exception is the hello, which may grow by fields appended at its end; older clients skip them.
 - A later hello on the same connection replaces the earlier one: version and interval. It is not a TAB press, so it sends nothing by itself; while TAB is held, the next request is due one new interval after the last one. A hello with an invalid version is ignored and changes nothing.
+- **What is guaranteed:** from v1.0 on, a client keeps working with every newer server of the same major version, and a server with every older client of it. A new major version may drop this. Before v1.0, mixing versions is designed to work but not guaranteed. The guarantee is checked before each release (see Testing, Gates); if keeping it ever costs too much, the window is narrowed in this spec first.
 
 **By version**
 
@@ -620,9 +621,9 @@ The game's main thread only copies changed numbers once a minute; all other hist
 - **Logout and shutdown:** final values are copied before a player object disappears, and the player's state file is rewritten; on server stop the buffer is flushed and the log closed.
 - **Measuring:** snapshot and write durations are logged, and a debug command shows queue size, cache size and timings. It also reports the storage figures per level that the v0.14 review needs (see Review of levels and tiles). The target is that Scoreline is invisible in tick time.
 - **Profiling tools:**
-  - **Java Flight Recorder (JFR):** built into the JDK, no dependency. Scoreline's own work is marked with JFR events (from v0.2), which cost close to nothing while no recording runs. The load test records with JFR, so the time spent inside Scoreline can be compared without the noise of the vanilla tick.
+  - **Java Flight Recorder (JFR):** built into the JDK, no dependency, and no code in the mod. Since Java 25, JFR can count and time chosen methods without any code in them ([JEP 520](https://openjdk.org/jeps/520), method timing), selected by class, method or annotation; the manual profiling run uses it, so the time spent inside Scoreline can be seen apart from the vanilla tick. Admins can use the same JVM option on a real server.
   - **spark:** loaded only when Minecraft is started from this project (ModDevGradle's `localRuntime`, from CurseForge through CurseMaven). It is never a dependency of the published mod. It shows tick-based profiles in the game, and it is the format in which server admins send reports. Its CurseForge file ID is a property in `gradle.properties`; an empty value starts the runs without spark, so a missing spark build never blocks a Minecraft update.
-- **Storage figures (from v0.10):** bytes written, file count and write durations for a fixed workload join the performance comparison (see Testing). Sizes and counts are exact, so they are compared exactly rather than with timing limits.
+- **Storage figures (from v0.10):** sizes and counts are exact, so the simulation's correctness run checks them on every change to the history code (see Testing). The volume for 50 always-online players over a year, and the time of writing, packing and deleting files, come from a manual run.
 - **Larger servers later:** snapshot work can be spread over several ticks.
 
 ## Privacy (v0.8 for the TAB list, v0.13 for history)
@@ -739,19 +740,23 @@ Everything that decides something is tested by machine; only the thin layer that
 
 | Kind | What it covers | How |
 | --- | --- | --- |
-| Unit tests | Encoding, levels, retention, baseline and decrease rules, recorded-set changes, request budget, format presets, config validation, layout decisions | JUnit in `common`, no Minecraft needed |
-| Property tests | Rules that must always hold, for example "decoding what was encoded returns the same values", "a tile's start value plus its differences equals the next tile's start value" and "all levels show the same total at a shared boundary" | Thousands of random inputs per rule |
-| Simulated time | Levels, retention and file sizes over a long period, checked against the estimates | A fake clock plays a year of server life in seconds |
-| Protocol compatibility | Today's code still reads the messages of every earlier protocol version | Stored example messages per version (golden files) |
-| Crash safety | Startup recovers everything before a broken log entry | The log file is cut off at every possible position |
-| Microbenchmarks | Time and allocated bytes per operation of the logic code (encoding, request rules, later snapshot, tiles and storage), compared with the old version | JMH with its allocation profiler (`-prof gc`) in `common` |
-| Load test | The whole mod under a fixed workload, for example 50 mock players sending requests for a set time, compared with the old version | A game test with a JFR recording; compares the time inside Scoreline's JFR events, not the whole tick |
-| Mutation testing | Whether the tests check results, not only run lines: small changes to the code (`<` to `<=`, a removed call) must make a test fail | PIT on `common`, with its history so only changed code is tested again |
-| Fuzzing | Decoding of what clients send to the server: malformed input must be rejected, never throw unexpected exceptions or allocate without bound | Jazzer (`@FuzzTest`); found inputs are kept and run in every build |
-| Game tests, server side | The mod loads, hello is sent, a request gets the right answer, hidden stats are not sent, the request budget holds; a vanilla client gets no Scoreline message and still plays, and appears in modded clients' lists | Minecraft's game-test framework on a headless server with mock players; a mock player's connection can act as a modded or a vanilla client |
-| Smoke test | A dedicated server starts and stops cleanly with the mod | Build workflow |
-| Manual checklist | The drawing layer: TAB overlay, settings screen, stat picker, graph screen | Before each release, documented in the repository |
+| Unit tests | Encoding, levels, retention, baseline and decrease rules, recorded-set changes, request budget, format presets, config validation, layout decisions; from v0.10 the overload rules of the history hand-over queue, step by step | JUnit in `common`, no Minecraft needed; time is passed in, so tests run on a fake clock |
+| Property tests (from v0.10) | Rules that must always hold, for example "a tile's start value plus its differences equals the next tile's start value" and "all levels show the same total at a shared boundary". Until then, the fuzzers' round trip ("what decodes, re-encodes to the same payload") is the property test of the codecs | Thousands of random inputs per rule |
+| Protocol compatibility | Today's code reads the messages of every earlier protocol version, and (from v1.0) earlier releases read today's messages | Stored example messages per protocol version (golden files), read by one generic test; see Mixed mod versions and Gates |
+| Simulation, correctness run (v0.10) | The history engine over more than a year: every tile of every level is created, closed, packed and deleted, across a year boundary and every retention limit; scripted events (crash, restored backup, a mode set to Off, a clock jump, overload); exact sizes (bytes per stored change, files per player) | Plain Java on a fake clock with a few players; every result is compared with a simple in-memory record of the true values |
+| Crash safety (v0.10) | Startup recovers everything before a broken log entry, and every failed write leaves the files recoverable | The log is cut off at a position, or a test file layer behind `HistoryStore` fails the *n*-th write; record boundaries and a sample on pull requests, every position before a release |
+| Microbenchmarks | Time and allocated bytes per operation of the logic code (decode, request rules, building and encoding a response; later snapshot, tiles and storage), compared with the old version | JMH with its allocation profiler (`-prof gc`) in `common`; one benchmark per operation, not per method |
+| Mutation testing | Whether the tests check results, not only run lines: small changes to the code (`<` to `<=`, a removed call) must make a test fail | PIT on `common` and on the development tools (`tools`), run in full: it takes under a minute |
+| Fuzzing | Decoding of what clients send to the server: malformed input must be rejected, never throw unexpected exceptions or allocate without bound. Scoreline is public, so a server may have players with modified clients | Jazzer (`@FuzzTest`); found inputs are kept and run in every build |
+| Game tests, server side | The mod loads, hello is sent, a request gets the right answer, hidden stats are not sent, the request budget holds; a vanilla client gets no Scoreline message and still plays, and appears in modded clients' lists; a hostile modified client (flooding, the largest request, unknown or hidden stats) cannot harm the server; a player who leaves is forgotten, also over many joins and leaves; from v0.7, the work per tick does not grow with the number of players holding TAB (counted, not timed) | Minecraft's game-test framework on a headless server with mock players; a mock player's connection can act as a modded or a vanilla client |
+| Jar check | The published jar is complete: version filled in, service registrations present, no test classes, no spark | Opens the built jar in the build, without starting Minecraft |
+| Smoke test | A dedicated server starts with the **built jar**, logs Scoreline's version and stops cleanly | A dedicated server with the jar in its mods folder, stopped with `stop` |
+| Client startup check (from v0.3) | The built jar loads in a real client with the right version, and all client hooks attach | A real client started once and quit; see New Minecraft versions |
+| Manual runs | Speed under load: a profiling run with 50 mock players. Storage volume (from v0.10): 50 always-online players for a year on real files, reporting bytes, file counts and the time of writing, packing and deleting | Started by hand, as the release checklist says; never a gate |
+| Manual checklist | The drawing layer: TAB overlay, settings screen, stat picker, graph screen; until the client startup check exists, the in-game check that a client gets the stats; when each manual run is due | Before each release, documented in the repository |
 | Real server | Behaviour with real players over days | The alpha builds on the modpack server, with the debug command for timings |
+
+A load test that times the whole mod every night was considered and left out. Load testing looks for problems that only appear under load ([Jiang and Hassan](https://www.eecs.yorku.ca/~zmjiang/publications/tse2015_jiang.pdf)): wrong results, leaks, broken overload handling, and slowness. The first three are exact and are covered more cheaply by the unit, game and simulation tests above. Tick time on shared build machines varies too much to show Scoreline's small share ([Meterstick](https://www.arxiv.org/abs/2112.06963)), so speed under load is checked by hand.
 
 The individual test cases, including boundaries, invalid input and failure cases, are designed per task when each version's implementation plan is written.
 
@@ -760,34 +765,45 @@ The individual test cases, including boundaries, invalid input and failure cases
 - Every test must pass before a change is merged.
 - Coverage gate on the logic code: at least 95% of lines and 90% of branches. Logic code is everything that decides something: encoding, levels, protocol, settings, layout decisions and the API.
 - The drawing layer and the loader glue are excluded from the gate, because by design they hold no logic.
+- The development tools (`tools`, for example the performance comparison) have a stricter gate: 100% of lines and branches. They are small, and they decide whether a pull request fails. Only a launcher whose sole job is to exit the process with the result is excluded.
+- Every method of the logic code that the hot paths reach is also reached by a benchmark. The hot paths start at a short list of loader listeners that run per tick or per network message; everything they call is hot, and code that runs only at startup or on a command is not. A static check of the compiled classes enforces this in every build; code that only prepares a benchmark's input does not count. Benchmarks measure operations, so one benchmark covers every helper its operation calls.
 - Performance is compared, not measured against fixed numbers. Shared build machines are too noisy for numbers stored over months: one study measured 26% to 81% false alarms for naive regression checks in the cloud ([Laaber et al.](https://research.chalmers.se/en/publication/?id=511491)). Medians are stable, and two versions run side by side on the same machine compare well. So the performance job runs the old and the new version in the same job, alternating, and compares medians. The benchmarks stay runnable against any earlier tag, which is the baseline for later work.
-- The performance job fails only on a clear regression. The limits are set in the plan: generous for time, tighter for allocated bytes, which vary much less; storage sizes and counts are exact.
-- Slow and thorough checks (performance comparison, mutation testing, fuzzing, and from v0.10 the simulated year and exhaustive crash tests) run on every pull request and in the release workflow, not on a schedule: there is one pull request per version, so a schedule would mostly rerun unchanged code. Each also has a manual button.
+- Both versions are measured with the same ruler: the new code's benchmark sources and the new code's measurement settings, built against each version's own logic code. A change to a benchmark's input or settings then changes both sides alike, and only the code difference is measured. If the new benchmarks do not compile against the old code (an interface changed), each version uses its own benchmarks and the comparison says so.
+- The performance job fails only on a clear regression. The limits are set in the plan: generous for time, tighter for allocated bytes, which vary much less.
+- The performance comparison is split by how much each signal costs to measure well:
+  - **Allocated bytes on every pull request**, blocking. They are nearly exact, so one short round is enough, and a pull request waits only a few minutes. A regression is measured once more before it fails the pull request, because a single JVM can differ by one compiler decision.
+  - **Time nightly on `master`**, only if `master` changed since the last nightly run; the baseline is the commit that run checked. Nobody waits for it, so it runs enough forks and rounds for stable medians. A regression opens an issue naming the commits in between.
+  - **Everything before a release**, compared with the previous release, blocking. A feature may make existing work slower on purpose: such a regression is accepted by listing the metric and the reason in the release pull request, so it is a decision, not an accident, and the changelog notes it.
+- Storage sizes are exact: the simulation's correctness run checks them on every pull request that touches history code, so a format change that makes the files larger is a decision too.
+- The slower checks run where their code changed: mutation testing on pull requests that change logic code, fuzzing on pull requests that change payload code, and from v0.10 the simulation on pull requests that change history code. The release workflow runs all of them, with every crash position and fuzzing for its full time. The saved fuzzing inputs run in every build. Each check also has a manual button.
+- The smoke test and, from v0.3, the client startup check run nightly, before a release and on the pull request the version check opens for a new Minecraft version. The jar check runs in every build.
+- Before a release that changed a stored example message, the golden test of one earlier release per protocol version of the current major version reads today's messages (from v1.0; see Mixed mod versions). That release's own test is used, so the check runs the code players actually have.
+- The released example messages never change: the build fails if a protocol version folder differs from a release that contains it.
 
 **New Minecraft versions: what the tests can and cannot tell**
 
 | What changed in Minecraft | Caught by | Signal |
 | --- | --- | --- |
 | Renamed or changed game code that Scoreline calls | The build on the new version | The version-check pull request fails with the compile error |
-| Code that a hook (mixin) attaches to | Smoke test and client startup check | The game stops at startup, because all hooks are configured to fail hard instead of being skipped |
+| Code that a hook (mixin) attaches to | Smoke test and client startup check, both with the built jar | The game stops at startup, because all hooks are configured to fail hard instead of being skipped |
 | Behaviour on the server | Game tests, including tests that pin down the vanilla behaviour Scoreline relies on, for example "a mock player's death raises the deaths stat by one and the change hook sees it" | A failing game test |
 | The look or layout of the TAB list or screens | Nothing automatic | The manual checklist, a few minutes in a test world |
 
 - The unit tests in `common` do not touch Minecraft and say nothing about compatibility.
-- The client startup check starts a real client once, just far enough to confirm that all client hooks attach, then quits. Nothing is compared.
+- The client startup check starts a real client once with the built jar, just far enough to confirm that Scoreline loaded with the right version and all client hooks attach, then quits. Nothing is compared. How it runs on a build machine (a virtual display, or a lighter launch if NeoForge offers one) is decided in v0.3.
 - Each mod file declares the Minecraft line it supports, for example 26.3.x. Patch versions need nothing; a new line such as 26.4 always needs a new release.
 - Green pull request: run the visual checklist and press release, no code changes. Red pull request: the log shows what broke.
 
 ## GitHub setup: tests, releases, version checks
 
-Four GitHub Actions workflows cover the routine work: every change is built and tested, every pull request gets the thorough checks, a release is started by hand with a version bump, and a daily job reports new Minecraft versions. The release flow follows the one used in the apihistory project.
+Four GitHub Actions workflows cover the routine work: every change is built and tested, every pull request and every changed night on `master` get the thorough checks, a release is started by hand with a version bump, and a daily job reports new Minecraft versions. The release flow follows the one used in the apihistory project.
 
 **Workflows**
 
 | Workflow | Runs when | What it does |
 | --- | --- | --- |
-| Build and test | Every push and pull request | Builds all loader modules, runs unit tests and game tests, starts a headless server and a client once with the mod, checks coverage, uploads the jars |
-| Thorough checks | Every pull request, plus a manual button with an optional baseline (a tag or commit; default: the pull request's base) | Runs the microbenchmarks and the load test for the baseline and the new code on the same machine and writes the comparison into the job summary; runs mutation testing and fuzzing for a fixed time per target; uploads the JMH results, JFR recordings and reports |
+| Build and test | Every push and pull request | Builds all loader modules, runs unit tests, the saved fuzzing inputs and game tests, checks coverage and the jar's contents, uploads the jars |
+| Thorough checks | Every pull request; nightly on `master` if it changed since the last nightly run; plus a manual button with an optional baseline (a tag or commit) | On a pull request: compares the allocated bytes of the microbenchmarks with the pull request's base, and runs mutation testing, fuzzing and (from v0.10) the simulation where their code changed. Nightly: compares time and allocation of the microbenchmarks for the last checked commit and `master` on the same machine, runs the smoke test and (from v0.3) the client startup check with the built jar, and opens an issue on a failure. Writes the comparison into the job summary and uploads the JMH results and reports |
 | Release | Started by hand, with a dropdown: patch, minor or major | Prepares and merges a release pull request, tags it, builds once, drafts the GitHub Release; store uploads wait for approval |
 | Version check | Daily, plus a manual button | Compares the newest Minecraft release with the supported one and checks whether NeoForge, Fabric, YACL and spark have builds for it |
 
@@ -897,7 +913,7 @@ All design questions are decided. These points can only be answered while buildi
 - [ ] Whether the MultiLoader Template and NeoForge's game-test framework are ready for 26.3 (v0.1).
 - [x] Minecraft's size limit for a single payload, against the 150 KB tile estimate (v0.2). The vanilla 26.3 code has 1,048,576 bytes to the client and 32,767 bytes to the server. NeoForge 26.3 splits larger registered payloads automatically (`GenericPacketSplitter`), but only when both sides run NeoForge. A 150 KB tile fits in one clientbound payload; requests to the server must stay under 32 KB. Fabric is checked when the Fabric build arrives (v0.9).
 - [ ] spark's CurseForge project ID and a file for 26.3, and that ModDevGradle's `localRuntime` keeps it out of the published metadata (v0.2).
-- [x] Whether game-test mock players can send Scoreline's payloads to the server, for the load test (v0.2). Not with Minecraft's own mock players: none of them has a connection with negotiated channels. A mock player whose `Connection` sits in a Netty `EmbeddedChannel` and is set up with NeoForge's `NetworkRegistry.configureMockConnection` before it joins can send and receive them, as Java objects without encoding. NeoForge's own `testframework` does the same.
+- [x] Whether game-test mock players can send Scoreline's payloads to the server, for the game tests (v0.2). Not with Minecraft's own mock players: none of them has a connection with negotiated channels. A mock player whose `Connection` sits in a Netty `EmbeddedChannel` and is set up with NeoForge's `NetworkRegistry.configureMockConnection` before it joins can send and receive them, as Java objects without encoding. NeoForge's own `testframework` does the same.
 - [ ] Whether Jazzer runs with the vanilla classes on `common`'s test classpath (v0.2).
 - [ ] Tooling for the client startup check on NeoForge and Fabric (v0.3).
 - [ ] Whether the publishing action supports 26.x versions, and how long CurseForge's review takes (v0.3).
@@ -929,4 +945,7 @@ The design borrows from published work on time-series storage and interactive vi
 | *Java Concurrency in Practice* (Goetz) | One owner thread for the history data |
 | [Software Microbenchmarking in the Cloud. How Bad is it Really?](https://research.chalmers.se/en/publication/?id=511491) (Laaber, Scheuner and Leitner, EMSE 2019) | Comparing versions side by side on one machine instead of storing numbers over time |
 | [Coverage Is Not Strongly Correlated with Test Suite Effectiveness](https://doi.org/10.1145/2568225.2568271) (Inozemtseva and Holmes, ICSE 2014) | Mutation testing next to the coverage gate |
+| [A Survey on Load Testing of Large-Scale Software Systems](https://www.eecs.yorku.ca/~zmjiang/publications/tse2015_jiang.pdf) (Jiang and Hassan, TSE 2015) | What a load test is for: problems that only appear under load, not only speed; why the load test was left out |
+| [Meterstick: Benchmarking Performance Variability in Cloud and Self-hosted Minecraft-like Games](https://www.arxiv.org/abs/2112.06963) (Eickhoff, Donkervliet and Iosup, ICPE 2023) | Tick time varies widely on shared machines, so it is not compared automatically |
+| [JEP 520: JFR Method Timing & Tracing](https://openjdk.org/jeps/520) (JDK 25) | Counting and timing chosen methods without code in the mod |
 | RRDtool | Several resolutions of the same data with retention |
