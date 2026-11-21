@@ -1,5 +1,6 @@
 package io.github.foursource.scoreline.gametest;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -61,7 +62,7 @@ public final class StatsRequestTests {
         return List.of(new GameTestCase("t48_reads_own_stats", StatsRequestTests::t48_readsOwnStats), new GameTestCase("t49_reads_both_stats", StatsRequestTests::t49_readsBothStats),
                 new GameTestCase("t50_gate_limits_player_requests", StatsRequestTests::t50_gateLimitsPlayerRequests),
                 new GameTestCase("t124_lists_vanilla_players", StatsRequestTests::t124_listsVanillaPlayers),
-                new GameTestCase("t125_vanilla_request_is_rejected", StatsRequestTests::t125_vanillaRequestIsRejected));
+                new GameTestCase("t125_vanilla_request_is_rejected", StatsRequestTests::t125_vanillaRequestIsRejected), new GameTestCase("t151_hostile_client", StatsRequestTests::t151_hostileClient));
     }
 
     // Bug: stat mapping swapped or wrong stat read; wrong UUID; handler not registered or not replying
@@ -162,6 +163,35 @@ public final class StatsRequestTests {
         List<Long> valuesV = valuesOf(helper, responsesM.getFirst(), clientV.player().getUUID());
         helper.assertTrue(valuesV.equals(List.of(200L, 3L)), "wrong values for vanilla client: " + valuesV);
 
+        helper.succeed();
+    }
+
+    // Bug: an unusual but legal request throws in the handler or disconnects the client; a misbehaving client disturbs other players
+    private static void t151_hostileClient(GameTestHelper helper) {
+        MockClient bystander = MockClient.connect(helper, MockClient.Kind.MODDED);
+        MockClient oddRequester = MockClient.connect(helper, MockClient.Kind.MODDED);
+        MockClient flooder = MockClient.connect(helper, MockClient.Kind.MODDED);
+
+        // (2) The largest legal request: the most IDs, each as long as allowed, none of them known
+        List<String> unknown = new ArrayList<>();
+        for (int i = 0; i < Protocol.MAX_STAT_IDS; i++) {
+            String id = "questmod:unknown_" + i + "_";
+            unknown.add(id + "x".repeat(Protocol.MAX_STAT_ID_LENGTH - id.length()));
+        }
+        oddRequester.sendPayload(new StatsRequestPayload(unknown));
+        helper.assertTrue(oddRequester.receivedPayloads(StatsResponsePayload.class).isEmpty(), "expected no response to unknown IDs");
+
+        // (1) A flood in one tick, far less than one refill interval: only the budget is answered
+        for (int i = 0; i < Protocol.BUDGET_CAPACITY + 100; i++) {
+            flooder.sendPayload(new StatsRequestPayload(STATS));
+        }
+        int answered = flooder.receivedPayloads(StatsResponsePayload.class).size();
+        helper.assertTrue(answered == Protocol.BUDGET_CAPACITY, "expected " + Protocol.BUDGET_CAPACITY + " responses, got " + answered);
+
+        // (3) Everyone is still connected, and other players are still answered
+        helper.assertTrue(oddRequester.isConnected() && flooder.isConnected() && bystander.isConnected(), "a client was disconnected");
+        bystander.sendPayload(new StatsRequestPayload(STATS));
+        helper.assertTrue(bystander.receivedPayloads(StatsResponsePayload.class).size() == 1, "the bystander's request was not answered");
         helper.succeed();
     }
 }
