@@ -1,10 +1,24 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 # Go to the project root
 cd "$(dirname "$0")/.."
 
 goldenBuilds=./common/build/goldens/
 goldenResources=./common/src/test/resources/protocol/
+
+# A version folder that any release contains never changes; releasedIn names that release
+releasedIn=""
+released() {
+    local tag
+    for tag in $(git tag --list 'v*'); do
+        if git cat-file -e "$tag:common/src/test/resources/protocol/$1" 2> /dev/null; then
+            releasedIn=$tag
+            return 0
+        fi
+    done
+    return 1
+}
 
 # Delete the last generated goldens if they exist, so an old golden will never be copied
 rm -r -f -- "$goldenBuilds"
@@ -41,6 +55,20 @@ notSaved=0
 while IFS= read -r -d '' versionDir; do
     version=$(basename -- "$versionDir")
     files=$(find "$versionDir" -type f -name '*.bin' | wc -l)
+
+    # Released: nothing is written. Identical bytes are fine; anything else is refused and fails the run.
+    if released "$version"; then
+        while IFS= read -r -d '' generated; do
+            relative=${generated#"$goldenBuilds"}
+            if [ -e "$goldenResources$relative" ] && cmp -s -- "$generated" "$goldenResources$relative"; then
+                echo "unchanged $relative"
+            else
+                echo "refused   $relative: $version is part of the release $releasedIn, so its example messages never change"
+                notSaved=$((notSaved + 1))
+            fi
+        done < <(find "$versionDir" -type f -name '*.bin' -print0 | sort -z)
+        continue
+    fi
 
     # A version without a resources folder is new. Raising Protocol.VERSION by accident would create it, so ask first.
     newVersion=false
