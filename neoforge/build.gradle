@@ -90,3 +90,38 @@ sourceSets.configureEach {
         }
     }
 }
+
+// Coverage of the game-test run, a report only, never a gate: ScorelineServer and the loader glue are outside
+// common's coverage gate, and this shows which of their lines the game tests reach. JaCoCo's agent records the
+// run into build/jacoco/gameTest.exec; the report matches the classes by their bytes, which ModLauncher loads unchanged.
+apply plugin: 'jacoco'
+def gameTestExec = layout.buildDirectory.file('jacoco/gameTest.exec')
+// The jacocoAgent configuration holds a jar that contains the agent jar; unpack it once
+def jacocoAgentDir = layout.buildDirectory.dir('jacocoAgent')
+def extractJacocoAgent = tasks.register('extractJacocoAgent', Sync) {
+    from(zipTree(configurations.jacocoAgent.singleFile)) { include 'jacocoagent.jar' }
+    into jacocoAgentDir
+}
+tasks.named('prepareGameTestServerRun') { dependsOn extractJacocoAgent }
+neoForge.runs.named('gameTestServer') {
+    jvmArguments.add(provider {
+        "-javaagent:${jacocoAgentDir.get().file('jacocoagent.jar').asFile.absolutePath}=destfile=${gameTestExec.get().asFile.absolutePath},includes=io.github.foursource.*".toString()
+    })
+}
+def gameTestCoverageReport = tasks.register('gameTestCoverageReport', JacocoReport) {
+    description = 'Writes the coverage report of the last game-test run.'
+    group = 'verification'
+    executionData gameTestExec
+    classDirectories.setFrom(sourceSets.main.output.classesDirs)
+    sourceDirectories.setFrom(sourceSets.main.java.srcDirs, project(':common').file('src/main/java'))
+    reports {
+        html.required = true
+        xml.required = true
+    }
+    onlyIf { gameTestExec.get().asFile.exists() }
+}
+tasks.named('runGameTestServer') {
+    // The agent appends to an existing file, so each run starts empty
+    doFirst { gameTestExec.get().asFile.delete() }
+    finalizedBy gameTestCoverageReport
+}
