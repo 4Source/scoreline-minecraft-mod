@@ -7,16 +7,21 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import io.github.foursource.scoreline.net.Protocol;
 import io.netty.buffer.ByteBuf;
 import io.netty.handler.codec.DecoderException;
 import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.resources.Identifier;
 
 public class StatsRequestPayloadTest {
     /** The request's wire format without its limits, see {@link Wire#UNLIMITED_IDS}. */
     private static final StreamCodec<ByteBuf, List<String>> UNLIMITED = Wire.UNLIMITED_IDS;
+
+    /** Minecraft accepts at most this many bytes per payload sent to the server (the type's identifier included). */
+    private static final int MAX_SERVERBOUND_BYTES = 32_767;
 
     /**
      * Bug: IDs lost or reordered; a type ID that matches neither the handler nor the golden file's name
@@ -87,5 +92,24 @@ public class StatsRequestPayloadTest {
         // The decoder builds the payload through the constructor, so duplicates on the wire fail too
         byte[] onTheWire = Wire.encode(UNLIMITED, duplicates);
         Throws.withMessage(IllegalArgumentException.class, Protocol.DEATHS, () -> Wire.decode(StatsRequestPayload.STREAM_CODEC, onTheWire));
+    }
+
+    /**
+     * Bug: a later raise of a limit makes legal requests larger than Minecraft accepts, so the server drops clients that follow the protocol
+     */
+    @Test
+    void t150_largestLegalRequestFitsTheServerLimit() {
+        // The most IDs, each as long as allowed, every character 3 bytes in UTF-8 ('€'), the last one making them distinct
+        List<String> largest = new ArrayList<>();
+        for (int i = 0; i < Protocol.MAX_STAT_IDS; i++) {
+            largest.add("€".repeat(Protocol.MAX_STAT_ID_LENGTH - 1) + (char) ('一' + i));
+        }
+        StatsRequestPayload request = new StatsRequestPayload(largest);
+
+        int bytes = Wire.encode(Identifier.STREAM_CODEC, request.type().id()).length + Wire.encode(StatsRequestPayload.STREAM_CODEC, request).length;
+
+        Assertions.assertTrue(bytes < MAX_SERVERBOUND_BYTES, bytes + " bytes");
+        // The decoder accepts it: it is legal
+        assertEquals(request, Wire.decode(StatsRequestPayload.STREAM_CODEC, Wire.encode(StatsRequestPayload.STREAM_CODEC, request)));
     }
 }
