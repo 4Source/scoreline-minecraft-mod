@@ -76,7 +76,7 @@ public class GoldenFilesTest {
             assertEquals(version, hello.protocolVersion(), file + ": the hello's protocol version differs from its folder");
         }
         else {
-            assertArrayEquals(bytes, Wire.encode((StreamCodec<? super ByteBuf, T>) codec, payload), file + ": encodes to other bytes");
+            assertArrayEquals(bytes, PayloadBytes.encode((StreamCodec<? super ByteBuf, T>) codec, payload), file + ": encodes to other bytes");
         }
     }
 }

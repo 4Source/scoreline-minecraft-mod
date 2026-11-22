@@ -14,7 +14,7 @@ public class RequestBudgetTest {
      * Bug: budget starts empty
      */
     @Test
-    void t01_NewBudgetAllowsRequest() {
+    void t01_newBudgetAllowsRequest() {
         RequestBudget budget = new RequestBudget(CAP, T);
 
         assertTrue(budget.tryAcquire(0));
@@ -24,7 +24,7 @@ public class RequestBudgetTest {
      * Bug: off-by-one in the capacity check
      */
     @Test
-    void t02_RequestBurstAllowCapacity() {
+    void t02_requestBurstAllowCapacity() {
         RequestBudget budget = new RequestBudget(CAP, T);
 
         // Allowed request because of CAP=3
@@ -40,7 +40,7 @@ public class RequestBudgetTest {
      * Bug: no refill, or refill of more than one token
      */
     @Test
-    void t03_RefillOneTokenPerInterval() {
+    void t03_refillOneTokenPerInterval() {
         RequestBudget budget = new RequestBudget(CAP, T);
 
         // Drain capacity
@@ -59,7 +59,7 @@ public class RequestBudgetTest {
      * Bug: refill rounds up
      */
     @Test
-    void t04_NoRefillBeforeFullInterval() {
+    void t04_noRefillBeforeFullInterval() {
         RequestBudget budget = new RequestBudget(CAP, T);
 
         // Drain capacity
@@ -78,7 +78,7 @@ public class RequestBudgetTest {
      * Bug: tokens pile up beyond the capacity
      */
     @Test
-    void t05_TokensDoNotPileUp() {
+    void t05_tokensDoNotPileUp() {
         RequestBudget budget = new RequestBudget(CAP, T);
 
         // Drain capacity
@@ -99,7 +99,7 @@ public class RequestBudgetTest {
      * Bug: leftover time dropped at refill
      */
     @Test
-    void t06_KeepRemainingTime() {
+    void t06_keepRemainingTime() {
         RequestBudget budget = new RequestBudget(CAP, T);
 
         // Drain capacity
@@ -122,7 +122,7 @@ public class RequestBudgetTest {
      * Bug: negative elapsed time adds or removes tokens, or throws; reference time moved back to the earlier time
      */
     @Test
-    void t07_ClockGoingBackwardsGivesNoTokens() {
+    void t07_clockGoingBackwardsGivesNoTokens() {
         RequestBudget budget = new RequestBudget(CAP, T);
 
         // Drain capacity
@@ -152,7 +152,7 @@ public class RequestBudgetTest {
             "3, 0", // interval 0
             "3, -5" // negative interval
     })
-    void t08_InvalidArgumentsAreRejected(int capacity, long interval) {
+    void t08_invalidArgumentsAreRejected(int capacity, long interval) {
 
         assertThrows(IllegalArgumentException.class, () -> new RequestBudget(capacity, interval));
     }
@@ -161,7 +161,7 @@ public class RequestBudgetTest {
      * Bug: smallest valid values rejected (< 2 instead of < 1); capacity or interval hard-coded
      */
     @Test
-    void t15_SmallestValidAllowed() {
+    void t15_smallestValidAllowed() {
         int capacity = 1;
         long interval = 1;
         RequestBudget budget = assertDoesNotThrow(() -> new RequestBudget(capacity, interval));
@@ -183,7 +183,7 @@ public class RequestBudgetTest {
      * Bug: a refused request still uses a token (count goes negative) or restarts the refill timer
      */
     @Test
-    void t16_RefusedRequestChangesNothing() {
+    void t16_refusedRequestChangesNothing() {
         RequestBudget budget = new RequestBudget(CAP, T);
 
         // Drain capacity
@@ -206,7 +206,7 @@ public class RequestBudgetTest {
      * Bug: refill replaces the remaining tokens instead of adding to them
      */
     @Test
-    void t17_RefillAddsToRemainingTokens() {
+    void t17_refillAddsToRemainingTokens() {
         RequestBudget budget = new RequestBudget(CAP, T);
 
         // Use one token, CAP - 1 left
@@ -225,7 +225,7 @@ public class RequestBudgetTest {
      * Bug: time beyond the capacity is saved up and paid out later (reference time advanced only by the tokens added, not by the intervals passed)
      */
     @Test
-    void t18_IdleTimeWhileFullIsNotSaved() {
+    void t18_idleTimeWhileFullIsNotSaved() {
         RequestBudget budget = new RequestBudget(CAP, T);
 
         // Use one token, CAP - 1 left
@@ -244,7 +244,7 @@ public class RequestBudgetTest {
      * Bug: reference time fixed at 0 instead of the first request, so a clock with negative values never refills
      */
     @Test
-    void t19_FirstRequestSetsReferenceTime() {
+    void t19_firstRequestSetsReferenceTime() {
         RequestBudget budget = new RequestBudget(CAP, T);
 
         // Drain capacity
@@ -263,7 +263,7 @@ public class RequestBudgetTest {
      * Bug: refill count cast to int overflows and turns negative
      */
     @Test
-    void t20_VeryLongWaitDoesNotOverflow() {
+    void t20_veryLongWaitDoesNotOverflow() {
         RequestBudget budget = new RequestBudget(CAP, 1);
 
         // Drain capacity
@@ -284,7 +284,7 @@ public class RequestBudgetTest {
      * Bug: going back in time removes tokens from a budget that is not empty (T-07 misses this, because a drained budget hides it)
      */
     @Test
-    void t21_GoingBackKeepsRemainingTokens() {
+    void t21_goingBackKeepsRemainingTokens() {
         RequestBudget budget = new RequestBudget(CAP, T);
 
         // Allowed request
@@ -302,7 +302,7 @@ public class RequestBudgetTest {
      * Bug: state shared between instances, so one players requests use up everyone's budget
      */
     @Test
-    void t22_RequestBurstAllowCapacity() {
+    void t22_budgetsDoNotShareTokens() {
         RequestBudget budget1 = new RequestBudget(CAP, T);
         RequestBudget budget2 = new RequestBudget(CAP, T);
 

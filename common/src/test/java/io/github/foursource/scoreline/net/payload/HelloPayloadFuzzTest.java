@@ -9,6 +9,6 @@ public class HelloPayloadFuzzTest {
      */
     @FuzzTest(maxDuration = "120s")
     void t113_helloDecoder(byte[] data) {
-        FuzzCheck.decode(HelloPayload.STREAM_CODEC, data);
+        FuzzAssertions.assertDecodesSafely(HelloPayload.STREAM_CODEC, data);
     }
 }

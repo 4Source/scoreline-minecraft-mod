@@ -11,8 +11,8 @@ import net.minecraft.network.codec.StreamCodec;
  * The rule every fuzz test checks for its decoder: any bytes give either a payload or one of the exceptions that end in a clean disconnect; never another exception, a hang or an allocation without
  * bound (which Jazzer reports by itself). A decoded payload must survive a round trip: encoding it and decoding the bytes gives an equal payload.
  */
-final class FuzzCheck {
-    private FuzzCheck() {}
+final class FuzzAssertions {
+    private FuzzAssertions() {}
 
     /**
      * Decodes the bytes and checks the outcome.
@@ -21,7 +21,7 @@ final class FuzzCheck {
      * @param data the fuzzer's bytes
      * @param <T> the payload type
      */
-    static <T> void decode(StreamCodec<ByteBuf, T> codec, byte[] data) {
+    static <T> void assertDecodesSafely(StreamCodec<ByteBuf, T> codec, byte[] data) {
         T decoded;
         try {
             decoded = codec.decode(Unpooled.wrappedBuffer(data));
@@ -38,6 +38,6 @@ final class FuzzCheck {
             }
             throw e;
         }
-        assertEquals(decoded, Wire.decode(codec, Wire.encode(codec, decoded)), "the decoded payload does not survive a round trip");
+        assertEquals(decoded, PayloadBytes.decode(codec, PayloadBytes.encode(codec, decoded)), "the decoded payload does not survive a round trip");
     }
 }
