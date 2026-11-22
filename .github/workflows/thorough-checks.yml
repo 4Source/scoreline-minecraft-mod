@@ -83,15 +83,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Did logic code change?
+      - name: Did logic code or its tests change?
         id: changes
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          if git diff --name-only "$BASE...HEAD" | grep -qE '^(common|tools)/src/main/'; then
+          # Tests count too: a pull request that weakens a test is exactly what mutation testing catches
+          if git diff --name-only "$BASE...HEAD" | grep -qE '^(common|tools)/src/(main|test)/'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No logic code changed: nothing to mutate" >> "$GITHUB_STEP_SUMMARY"
+            echo "No logic code or tests changed: nothing to mutate" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Set up Java
