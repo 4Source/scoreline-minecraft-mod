@@ -33,7 +33,7 @@ public class RequestBudgetTest {
         assertTrue(budget.tryAcquire(0));
 
         // Not allowed as more than CAP
-        // assertFalse(budget.tryAcquire(0));
+        assertFalse(budget.tryAcquire(0));
     }
 
     /**
@@ -107,15 +107,15 @@ public class RequestBudgetTest {
         assertTrue(budget.tryAcquire(0));
         assertTrue(budget.tryAcquire(0));
 
-        // // Allowed request after refill
-        // assertTrue(budget.tryAcquire((long) (2.5 * T)));
-        // assertTrue(budget.tryAcquire((long) (2.5 * T)));
+        // Allowed request after refill
+        assertTrue(budget.tryAcquire((long) (2.5 * T)));
+        assertTrue(budget.tryAcquire((long) (2.5 * T)));
 
-        // // Not allowed as only 2 refilled
-        // assertFalse(budget.tryAcquire((long) (2.5 * T)));
+        // Not allowed as only 2 refilled
+        assertFalse(budget.tryAcquire((long) (2.5 * T)));
 
-        // // Allowed request after refill
-        // assertTrue(budget.tryAcquire(3 * T));
+        // Allowed request after refill
+        assertTrue(budget.tryAcquire(3 * T));
     }
 
     /**
@@ -130,17 +130,17 @@ public class RequestBudgetTest {
         assertTrue(budget.tryAcquire(5 * T));
         assertTrue(budget.tryAcquire(5 * T));
 
-        // // Not allowed even when it was in the past
-        // assertFalse(budget.tryAcquire(4 * T));
+        // Not allowed even when it was in the past
+        assertFalse(budget.tryAcquire(4 * T));
 
-        // // Not allowed as not refilled yet
-        // assertFalse(budget.tryAcquire((long) (5.5 * T)));
+        // Not allowed as not refilled yet
+        assertFalse(budget.tryAcquire((long) (5.5 * T)));
 
-        // // Allowed request after refill
-        // assertTrue(budget.tryAcquire(6 * T));
+        // Allowed request after refill
+        assertTrue(budget.tryAcquire(6 * T));
 
-        // // Not allowed no more than CAP
-        // assertFalse(budget.tryAcquire(6 * T));
+        // Not allowed no more than CAP
+        assertFalse(budget.tryAcquire(6 * T));
     }
 
     /**
@@ -154,7 +154,7 @@ public class RequestBudgetTest {
     })
     void t08_InvalidArgumentsAreRejected(int capacity, long interval) {
 
-        // assertThrows(IllegalArgumentException.class, () -> new RequestBudget(capacity, interval));
+        assertThrows(IllegalArgumentException.class, () -> new RequestBudget(capacity, interval));
     }
 
     /**
