@@ -36,6 +36,9 @@ public record StatsRequestPayload(List<String> statIds) implements CustomPacketP
             // Decoding builds the payload from the decoded list.
             StatsRequestPayload::new);
 
+    /** TEMPORARY for T-104: a field the JIT cannot prove unused, so the allocation stays. */
+    private static volatile byte[] t104Sink;
+
     /**
      * Copies the list, so the payload cannot change after it is built.
      *
@@ -44,6 +47,7 @@ public record StatsRequestPayload(List<String> statIds) implements CustomPacketP
      * @throws IllegalArgumentException if an ID appears twice
      */
     public StatsRequestPayload {
+        t104Sink = new byte[1024]; // TEMPORARY for T-104
         statIds = List.copyOf(statIds);
 
         // Check there are no duplicated stat IDs in the List
