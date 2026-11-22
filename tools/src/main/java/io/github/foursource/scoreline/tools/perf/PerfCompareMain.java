@@ -173,8 +173,8 @@ public final class PerfCompareMain {
         Set<String> benchmarks = new LinkedHashSet<>();
         for (PerfCompare.Row row : result.rows()) {
             if (row.verdict() == PerfCompare.Verdict.REGRESSION) {
-                int parameters = row.name().indexOf('[');
-                benchmarks.add(parameters < 0 ? row.name() : row.name().substring(0, parameters));
+                // The part before the parameters, or the whole name if it has none
+                benchmarks.add(row.name().split("\\[", 2)[0]);
             }
         }
         // Lines end with \n on every system: bash reads them, and would keep a \r as part of the pattern
