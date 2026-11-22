@@ -19,7 +19,7 @@ Scoreline is a Minecraft mod that shows player statistics as extra columns in th
 | --- | --- | --- |
 | v0.1 | Skeleton | Empty mod that loads on NeoForge 26.3; the request budget as first tested logic; build workflow with unit tests, smoke test and coverage gate; release flow up to GitHub Releases |
 | v0.2 | Protocol | Hello payload, request and response for playtime and deaths; game tests; stored example messages; performance comparison between versions, mutation testing and fuzzing on pull requests; spark for local runs |
-| v0.3 | TAB overlay | Two fixed columns in the TAB list; client startup check; first CurseForge upload (alpha); docs site with install and player page |
+| v0.3 | TAB overlay | Two fixed columns in the TAB list; client startup check; first CurseForge upload (alpha); docs site with install, download and player page; NeoForge update check |
 | v0.4 | Settings | `ClientSettings` and `ServerSettings`, YACL settings screen, refresh interval, configuration reference |
 | v0.5 | Stat picker | Native stat picker, all stats selectable, four column slots |
 | v0.6 | Stats API | Stat providers, vanilla stats on the same interface, format presets, API jar, developer guide and Javadoc |
@@ -44,7 +44,7 @@ v0.1 to v0.9 build the TAB leaderboard for online players in small steps; v0.10 
 
 - **v0.1 Skeleton:** an empty mod that loads on NeoForge 26.3, with the build-and-test workflow and the release flow up to GitHub Releases. The request budget is built here as the first tested logic, so the tests and the coverage gate have something to measure.
 - **v0.2 Protocol:** hello payload, request and response. The server answers with playtime and deaths for online players. Each side falls back to vanilla behaviour if the other lacks the mod. From here on, the performance of the new code is compared with the old: allocation on every pull request, time nightly and before each release (see Testing), so later work on larger servers has a baseline to compare with.
-- **v0.3 TAB overlay:** the TAB list shows playtime and deaths, in vanilla order. First alpha upload to CurseForge. Docs site.
+- **v0.3 TAB overlay:** the TAB list shows playtime and deaths, in vanilla order. First alpha upload to CurseForge. Docs site with a download page. NeoForge tells players when a newer version exists (see Update check).
 - **v0.4 Settings:** settings layers, YACL settings screen, server setting for the refresh interval.
 - **v0.5 Stat picker:** up to four columns per player, chosen from all statistics (general, per-item, per-block, per-mob).
 - **v0.6 Stats API:** other mods can add stats; these are selectable like vanilla stats. Format presets with options. Separate API jar.
@@ -84,6 +84,7 @@ The project uses the MultiLoader Template: almost all code lives in a shared mod
 - Loader modules contain no logic, only registration.
 - Components that may be replaced later sit behind an interface: `ClientSettings` and `ServerSettings` (config), `HistoryStore` (storage), stat providers (data sources).
 - Code that needs no Minecraft classes (encoding, levels, rate limiting, baseline and decrease rules) is kept free of them so it can be unit tested.
+- Shared code may use Minecraft classes, but never reaches global game state itself (the loader's services, the client or server singleton). It gets what it needs (network access, the online players, key state, the time) as parameters from the loader module, so it can be unit tested with fakes.
 - Code that decides what to draw is kept apart from the code that draws (see Testing).
 
 **Dependencies**
@@ -740,7 +741,7 @@ Everything that decides something is tested by machine; only the thin layer that
 
 | Kind | What it covers | How |
 | --- | --- | --- |
-| Unit tests | Encoding, levels, retention, baseline and decrease rules, recorded-set changes, request budget, format presets, config validation, layout decisions; from v0.10 the overload rules of the history hand-over queue, step by step | JUnit in `common`, no Minecraft needed; time is passed in, so tests run on a fake clock |
+| Unit tests | Encoding, levels, retention, baseline and decrease rules, recorded-set changes, request budget, format presets, config validation, layout decisions, the server's and client's protocol handling; from v0.10 the overload rules of the history hand-over queue, step by step | JUnit in `common`, with fakes for the loader's services; Minecraft classes allowed, no running game; time is passed in, so tests run on a fake clock |
 | Property tests (from v0.10) | Rules that must always hold, for example "a tile's start value plus its differences equals the next tile's start value" and "all levels show the same total at a shared boundary". Until then, the fuzzers' round trip ("what decodes, re-encodes to the same payload") is the property test of the codecs | Thousands of random inputs per rule |
 | Protocol compatibility | Today's code reads the messages of every earlier protocol version, and (from v1.0) earlier releases read today's messages | Stored example messages per protocol version (golden files), read by one generic test; see Mixed mod versions and Gates |
 | Simulation, correctness run (v0.10) | The history engine over more than a year: every tile of every level is created, closed, packed and deleted, across a year boundary and every retention limit; scripted events (crash, restored backup, a mode set to Off, a clock jump, overload); exact sizes (bytes per stored change, files per player) | Plain Java on a fake clock with a few players; every result is compared with a simple in-memory record of the true values |
@@ -753,6 +754,7 @@ Everything that decides something is tested by machine; only the thin layer that
 | Smoke test | A dedicated server starts with the **built jar**, logs Scoreline's version and stops cleanly | A dedicated server with the jar in its mods folder, stopped with `stop` |
 | Load run | 50 mock players, each asking every 2 seconds for 30 seconds, get every answer: the request budget never refuses a client that follows the protocol, and nothing is dropped under sustained load. Correctness only: its timings are uploaded for reading, never compared | The manual profiling run's load on a headless server, nightly and before a release |
 | Client startup check (from v0.3) | The built jar loads in a real client with the right version, and all client hooks attach. It also takes screenshots of the drawing layer (the TAB list with several players, the settings screen, later the stat picker and the graph screen) and attaches them to the pull request | A real client on a virtual display, started once and quit; see New Minecraft versions |
+| Client against servers (from v0.3) | The modded client joins a vanilla server and sends no request, and joins a modded server and gets a response | The client startup check, extended to join a local vanilla server, then a local modded server |
 | Manual runs | Speed under load: the load run started by hand, with Java Flight Recorder's method timing read by a person. Storage volume (from v0.10): 50 always-online players for a year on real files, reporting bytes, file counts and the time of writing, packing and deleting | Started by hand when a change makes them worth it; never a gate |
 | Real server | Behaviour with real players over days | The alpha builds on the modpack server, with the debug command for timings |
 
@@ -764,7 +766,7 @@ The individual test cases, including boundaries, invalid input and failure cases
 
 - Every test must pass before a change is merged.
 - Coverage gate on the logic code: at least 95% of lines and 90% of branches. Logic code is everything that decides something: encoding, levels, protocol, settings, layout decisions and the API.
-- The drawing layer and the loader glue are excluded from the gate, because by design they hold no logic.
+- The drawing layer and the loader glue are excluded from the gate, because by design they hold no logic. Shared code that talks to the game is not excluded: it gets the game's objects passed in, so unit tests reach it.
 - The development tools (`tools`, for example the performance comparison) have a stricter gate: 100% of lines and branches. They are small, and they decide whether a pull request fails. Only a launcher whose sole job is to exit the process with the result is excluded.
 - Every method of the logic code that the hot paths reach is also reached by a benchmark. The hot paths start at a short list of loader listeners that run per tick or per network message; everything they call is hot, and code that runs only at startup or on a command is not. A static check of the compiled classes enforces this in every build; code that only prepares a benchmark's input does not count. Benchmarks measure operations, so one benchmark covers every helper its operation calls.
 - Performance is compared, not measured against fixed numbers. Shared build machines are too noisy for numbers stored over months: one study measured 26% to 81% false alarms for naive regression checks in the cloud ([Laaber et al.](https://research.chalmers.se/en/publication/?id=511491)). Medians are stable, and two versions run side by side on the same machine compare well. So the performance job runs the old and the new version in the same job, alternating, and compares medians. The benchmarks stay runnable against any earlier tag, which is the baseline for later work.
@@ -789,8 +791,8 @@ The individual test cases, including boundaries, invalid input and failure cases
 | Behaviour on the server | Game tests, including tests that pin down the vanilla behaviour Scoreline relies on, for example "a mock player's death raises the deaths stat by one and the change hook sees it" | A failing game test |
 | The look or layout of the TAB list or screens | Nothing automatic | The screenshots of the client startup check, which a person looks at before merging |
 
-- The unit tests in `common` do not touch Minecraft and say nothing about compatibility.
-- The client startup check starts a real client once with the built jar, just far enough to confirm that Scoreline loaded with the right version and all client hooks attach, takes the screenshots, then quits. Nothing is compared automatically: on a new Minecraft or YACL version, and when the drawing code changed, a person looks at the screenshots in the pull request before merging. How it runs on a build machine (a virtual display, or a lighter launch if NeoForge offers one) is decided in v0.3.
+- The unit tests in `common` do not run the game and say little about compatibility: they only show that the Minecraft classes they use still compile and behave the same outside a running game.
+- The client startup check starts a real client once with the built jar, just far enough to confirm that Scoreline loaded with the right version and all client hooks attach, and takes the screenshots. It then joins a local vanilla server (offline mode) and a local modded server in turn, and quits. It passes when the client's log shows no request on the vanilla server and a response on the modded one. Nothing else is compared automatically: on a new Minecraft or YACL version, and when the drawing code changed, a person looks at the screenshots in the pull request before merging. It needs the vanilla server jar from Mojang, whose EULA the workflow accepts. How it runs on a build machine (a virtual display, or a lighter launch if NeoForge offers one) is decided in v0.3.
 - Each mod file declares the Minecraft line it supports, for example 26.3.x. Patch versions need nothing; a new line such as 26.4 always needs a new release.
 - Green pull request: look at the screenshots and press release, no code changes. Red pull request: the log shows what broke.
 
@@ -803,7 +805,7 @@ Four GitHub Actions workflows cover the routine work: every change is built and 
 | Workflow | Runs when | What it does |
 | --- | --- | --- |
 | Build and test | Every push and pull request | Builds all loader modules, runs unit tests, the saved fuzzing inputs and game tests, checks coverage and the jar's contents, uploads the jars |
-| Thorough checks | Every pull request; nightly on `master` if it changed since the last nightly run; plus a manual button with an optional baseline (a tag or commit) | On a pull request: compares the allocated bytes of the microbenchmarks with the pull request's base, and runs mutation testing, fuzzing, (from v0.3) the client startup check with its screenshots and (from v0.10) the simulation where their code changed. Nightly: compares time and allocation of the microbenchmarks for the last checked commit and `master` on the same machine, runs the smoke test with the built jar, the load run and (from v0.3) the client startup check, and opens an issue on a failure. Writes the comparison into the job summary and uploads the JMH results and reports |
+| Thorough checks | Every pull request; nightly on `master` if it changed since the last nightly run; plus a manual button with an optional baseline (a tag or commit) | On a pull request: compares the allocated bytes of the microbenchmarks with the pull request's base, and runs mutation testing, fuzzing, (from v0.3) the client startup check (screenshots, then a vanilla and a modded server) and (from v0.10) the simulation where their code changed. Nightly: compares time and allocation of the microbenchmarks for the last checked commit and `master` on the same machine, runs the smoke test with the built jar, the load run and (from v0.3) the client startup check, and opens an issue on a failure. Writes the comparison into the job summary and uploads the JMH results and reports |
 | Release | Started by hand, with a dropdown: patch, minor or major | Prepares and merges a release pull request, tags it, builds once, drafts the GitHub Release; store uploads wait for approval |
 | Version check | Daily, plus a manual button | Compares the newest Minecraft release with the supported one and checks whether NeoForge, Fabric, YACL and spark have builds for it |
 
@@ -823,6 +825,7 @@ The build-and-test workflow runs them on every change, so a failing test blocks 
 4. **Build:** build the jars once, after the full test suite has passed.
 5. **Draft:** create a draft GitHub Release with this version's `CHANGELOG.md` section as its body and the jars attached.
 6. **Publish:** the upload to CurseForge (from v0.3) and to Modrinth (from v0.9) waits for the maintainer's approval.
+7. **Announce (from v0.3):** once the GitHub Release is published and the uploads are done, update `update.json` on the docs site (see Update check).
 
 - The version lives in `gradle.properties`; the build writes it into the mod metadata of each loader.
 - A dry-run option shows the next version and changelog without creating anything.
@@ -831,6 +834,16 @@ The build-and-test workflow runs them on every change, so a failing test blocks 
 - Store uploads use an existing action for mod uploads (for example `mc-publish`); its support for 26.x must be checked first. API tokens are stored as repository secrets.
 - Jar names follow `scoreline-<mod version>+<Minecraft version>-<loader>.jar`.
 - The `master` branch is protected: changes arrive by pull request, and the build workflow must pass.
+
+**Update check (from v0.3)**
+
+NeoForge checks for mod updates at game start: it reads the JSON file named by `updateJSONURL` in `neoforge.mods.toml` and marks the mod in the mods list when a newer version exists.
+
+- One `update.json` covers every supported Minecraft version. Its `promos` hold `<Minecraft version>-latest` (and from 1.0 `<Minecraft version>-recommended`), and one section per Minecraft version holds the changelog line of each release. A game reads only the entries for its own Minecraft version, so a fix for an older Minecraft version on a maintenance branch updates only that version's entries.
+- The file lives at the root of the docs site, outside the versioned docs, because it holds the state of all Minecraft versions while `master` knows only the newest one. Each release reads the current file, updates its own Minecraft version's entries and writes it back. The release workflow never runs twice at once, so two releases cannot overwrite each other.
+- It is updated only after the release is published (Release details, step 7), so it never announces a version players cannot download. The GitHub Release is available at once, also while a store upload is still in CurseForge's review.
+- Its `homepage` is the download page of the docs (see Documentation), not a store page, so players land on the docs and choose where to download.
+- Fabric has no built-in update check. From v0.9, Mod Menu finds updates of mods hosted on Modrinth by itself.
 
 **New Minecraft versions**
 
@@ -853,7 +866,7 @@ Until the public launch in v0.9, only the latest docs are published. Kept versio
 
 | Section | Content |
 | --- | --- |
-| Players | Installing, choosing TAB columns, the settings screen, hiding yourself, later the graph screen |
+| Players | Downloading, installing, choosing TAB columns, the settings screen, hiding yourself, later the graph screen |
 | Server admins | Installing; a configuration reference with every setting (what it does, allowed values, default, since which version, effect of changing it); stat modes with examples; commands; later storage sizing and retention |
 | Mod developers | Getting started (add the dependency, write a provider, register it, see it in the TAB list); concepts (counter and gauge, format presets); a complete example mod; compatibility policy; API reference |
 | Release information | Changelog; supported Minecraft and loader versions |
@@ -863,13 +876,15 @@ Until the public launch in v0.9, only the latest docs are published. Kept versio
 - The API reference is Javadoc generated by Gradle from the `api` module, published next to each docs version and linked from the developer pages.
 - The configuration reference is generated from the setting definitions in code, which also feed the settings screen. The build fails if the generated pages are out of date.
 - The release workflow deploys the docs for the released version.
+- The **download page** links to every place the mod can be downloaded from: CurseForge (from v0.3), Modrinth (from v0.9) and GitHub Releases. It lists the supported Minecraft versions with the newest Scoreline version for each. It has a fixed address that always shows the current page, because the update check's `homepage` points to it.
+- The install pages for players and admins say that NeoForge's update check contacts the docs site at every game start, and how to turn it off in NeoForge's own config.
 - The docs for a version are part of that version being done.
 
 **By version**
 
 | Step | Docs added |
 | --- | --- |
-| v0.3 | Site skeleton, install page, player page |
+| v0.3 | Site skeleton, install page, download page, player page, `update.json` |
 | v0.4 | Configuration reference |
 | v0.5 | Choosing columns with the stat picker |
 | v0.6 | Developer guide and Javadoc |
@@ -915,8 +930,10 @@ All design questions are decided. These points can only be answered while buildi
 - [ ] spark's CurseForge project ID and a file for 26.3, and that ModDevGradle's `localRuntime` keeps it out of the published metadata (v0.2).
 - [x] Whether game-test mock players can send Scoreline's payloads to the server, for the game tests (v0.2). Not with Minecraft's own mock players: none of them has a connection with negotiated channels. A mock player whose `Connection` sits in a Netty `EmbeddedChannel` and is set up with NeoForge's `NetworkRegistry.configureMockConnection` before it joins can send and receive them, as Java objects without encoding. NeoForge's own `testframework` does the same.
 - [ ] Whether Jazzer runs with the vanilla classes on `common`'s test classpath (v0.2).
-- [ ] Tooling for the client startup check on NeoForge and Fabric (v0.3).
+- [ ] Tooling for the client startup check on NeoForge and Fabric, including joining a server automatically (for example `--quickPlayMultiplayer`) and running on the Linux build machine without a screen (v0.3).
 - [ ] Whether the publishing action supports 26.x versions, and how long CurseForge's review takes (v0.3).
+- [ ] The format NeoForge 26.3 expects for `update.json` (`promos` keys, changelog sections, `homepage`), and how its update check is switched off (v0.3).
+- [ ] How a page and a file at the docs site root, outside `mike`'s versioned folders, are deployed without being removed by the next docs deploy (v0.3).
 - [ ] YACL 3.9.7 class and method names, and how YACL is referenced from the `common` module (v0.4).
 - [ ] What NeoForge fires on the client when a proxy (for example Velocity) moves the player to another backend server, and whether a modded-to-vanilla switch leaves the old hello in place, so the client keeps sending requests to a server without the mod (v0.4, when hellos start to repeat).
 - [ ] YACL button options that open the stat picker screen (v0.5).
