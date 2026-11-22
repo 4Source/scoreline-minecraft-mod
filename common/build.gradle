@@ -2,6 +2,8 @@ plugins {
     id 'multiloader-common'
     id 'net.neoforged.moddev'
     id 'jacoco'
+    id 'me.champeau.jmh'
+    id 'info.solidsoft.pitest'
 }
 
 neoForge {
@@ -11,20 +13,23 @@ neoForge {
     if (at.exists()) {
         accessTransformers.from(at.absolutePath)
     }
+    // ModDevGradle adds Minecraft and its libraries (Netty, ...) to the main source set only.
+    // The protocol tests and GoldenWriter encode payloads, so the test source set needs them too.
+    addModdingDependenciesTo(sourceSets.test)
+    addModdingDependenciesTo(sourceSets.jmh)
 }
 
 dependencies {
-    // Fabric and NeoForge both bundle Fabric Mixin, so it is safe to use it in common
-    // If you need to update, check what version they are using to see what is compatible
-    // https://github.com/neoforged/NeoForge/blob/26.3.x/gradle.properties#L37
-    // https://github.com/FabricMC/fabric-loader/blob/master/gradle.properties#L12
-    compileOnly('net.fabricmc:sponge-mixin:0.17.3+mixin.0.8.7')
-    // Fabric and NeoForge both bundle MixinExtras, so it is safe to use it in common
-    compileOnly(annotationProcessor('io.github.llamalad7:mixinextras-common:0.5.3'))
+    // Fabric and NeoForge both bundle Mixin and MixinExtras, so common only compiles against them
+    compileOnly(libs.sponge.mixin)
+    compileOnly(libs.mixinextras.common)
+    annotationProcessor(libs.mixinextras.common)
     // Unit tests dependencies (no Minecraft)
-    testImplementation(platform('org.junit:junit-bom:5.14.4'))
-    testImplementation('org.junit.jupiter:junit-jupiter')
-    testRuntimeOnly('org.junit.platform:junit-platform-launcher')
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testRuntimeOnly(libs.junit.platform.launcher)
+    // Fuzzing of the payload decoders: in a normal test run Jazzer only replays the saved inputs
+    testImplementation(libs.jazzer.junit)
 }
 
 configurations {
@@ -64,41 +69,180 @@ sourceSets.configureEach {
 
 tasks.named('test') {
     useJUnitPlatform()
+    // Jazzer's lists are separated like a class path: ';' on Windows, ':' elsewhere
+    def jazzerIncludes = ['io.github.foursource.scoreline.**', 'net.minecraft.network.**'].join(File.pathSeparator)
+    // Jazzer instruments only the decoding code it should explore: Scoreline's and the vanilla codecs it uses.
+    // With JAZZER_FUZZ=1 in the environment it generates new input, for only the first fuzz test of a run.
+    systemProperty 'jazzer.instrumentation_includes', jazzerIncludes
+    systemProperty 'jazzer.custom_hook_includes', jazzerIncludes
+    // Jazzer attaches its agent while the tests run; JDK 25 still allows that, with a warning, and will disallow it by default later
+    jvmArgs '-XX:+EnableDynamicAgentLoading'
 }
 
-def logicPackages = ['io/github/foursource/scoreline/net/**']
+// Coverage gate: every class of main is measured, except the files listed here.
+// List single files only, never packages or name wildcards, so a new file is measured until someone decides otherwise.
+// Each entry says why unit tests cannot run the class. Paths are relative to the class output folder, without ".class".
+def coverageExcludes = [
+    // Needs a running client (Minecraft, the connection to the server)
+    'io/github/foursource/scoreline/client/ScorelineClient',
+    // Needs a running server; the game tests run it, and their coverage report (neoforge) shows which lines they reach
+    'io/github/foursource/scoreline/server/ScorelineServer',
+    // Loads the loader's implementations through ServiceLoader when the class loads; common's tests have none
+    'io/github/foursource/scoreline/platform/Services',
+    // Its default method getEnvironmentName counts as code; it only formats an answer of the loader
+    'io/github/foursource/scoreline/platform/services/IPlatformHelper',
+    // Start-up and logging only
+    'io/github/foursource/scoreline/ScorelineCommon',
+]
 
-// The compiled classes of main, filtered to the logic packages. A FileTree is lazy:
-// Gradle evaluates it only when a task runs, after compileJava has produced the classes.
-def logicClasses = files(sourceSets.main.output.classesDirs).asFileTree.matching {
-    include logicPackages
+// All compiled classes of main. A FileTree is lazy: Gradle evaluates it only when a task runs,
+// after compileJava has produced the classes.
+def mainClasses = files(sourceSets.main.output.classesDirs).asFileTree
+
+// Each listed file with its nested and anonymous classes (Name$1.class, Name$Inner.class); lambdas make no class files.
+def coverageExcludePatterns = coverageExcludes.collectMany { [it + '.class', it + '$*.class'] }
+
+// The classes the gate measures
+def measuredClasses = mainClasses.matching {
+    exclude coverageExcludePatterns
+}
+
+def checkCoverageClasses = tasks.register('checkCoverageClasses') {
+    dependsOn tasks.named('compileJava')
+    doLast {
+        // A gate that measures nothing would always pass (T-10)
+        if (measuredClasses.isEmpty()) {
+            throw new GradleException('Coverage gate: no classes left to measure')
+        }
+        // An entry for a renamed or deleted class excludes nothing; it must be removed, so the list stays true
+        def stale = coverageExcludes.findAll { name ->
+            mainClasses.matching { include name + '.class' }.isEmpty()
+        }
+        if (!stale.isEmpty()) {
+            throw new GradleException("Coverage gate: coverageExcludes lists classes that do not exist: ${stale.join(', ')}")
+        }
+    }
 }
 
 tasks.named('jacocoTestReport') {
-    classDirectories.setFrom(logicClasses)
+    classDirectories.setFrom(measuredClasses)
 }
 
 tasks.named('jacocoTestCoverageVerification') {
-    classDirectories.setFrom(logicClasses)
+    classDirectories.setFrom(measuredClasses)
     violationRules {
+        // The measured code as a whole (element BUNDLE, JaCoCo's default)
         rule {
+            limit { counter = 'LINE';   value = 'COVEREDRATIO'; minimum = 0.95 }
+            limit { counter = 'BRANCH'; value = 'COVEREDRATIO'; minimum = 0.90 }
+        }
+        // Each class on its own, so a small untested class cannot hide behind well-tested ones.
+        // A class without branches has no BRANCH ratio and passes that limit.
+        rule {
+            element = 'CLASS'
             limit { counter = 'LINE';   value = 'COVEREDRATIO'; minimum = 0.95 }
             limit { counter = 'BRANCH'; value = 'COVEREDRATIO'; minimum = 0.90 }
         }
     }
     dependsOn tasks.named('test')
-    dependsOn checkLogicPackages
+    dependsOn checkCoverageClasses
 }
 
 tasks.named('check') {
     dependsOn tasks.named('jacocoTestCoverageVerification'), tasks.named('jacocoTestReport')
 }
 
-def checkLogicPackages = tasks.register('checkLogicPackages') {
-    dependsOn tasks.named('compileJava')
-    doLast {
-        if (logicClasses.isEmpty()) {
-            throw new GradleException('Coverage gate: no classes match logicPackages')
-        }
+tasks.register('generateGoldens', JavaExec) {
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'io.github.foursource.scoreline.net.GoldenWriter'
+    args layout.buildDirectory.dir('goldens').get().asFile.absolutePath
+}
+
+// Settings of the timed benchmark run (./gradlew :common:jmh). compare-performance.sh passes its own options on JMH's
+// command line, so both versions of a comparison are measured alike whatever their build files say.
+jmh {
+    fork = 2                  // two fresh JVMs per benchmark: one JVM can differ from the next by a single JIT decision
+    warmupIterations = 3      // the JIT compiles hot code only after many calls; earlier timings measure the interpreter
+    iterations = 5            // measured iterations per fork; their spread shows the noise
+    warmup = '1s'
+    timeOnIteration = '1s'
+    benchmarkMode = ['avgt']  // average time per call, lower is better; the default (operations per second) reads the other way round
+    timeUnit = 'ns'
+    profilers = ['gc']        // adds gc.alloc.rate.norm: bytes allocated per call, nearly exact between runs
+    failOnError = true        // by default JMH logs a benchmark that throws, leaves it out of the results and still succeeds
+    resultFormat = 'JSON'     // read by PerfCompare
+    resultsFile = layout.buildDirectory.file('results/jmh/results.json')
+    zip64 = true              // the benchmark jar holds Minecraft and its libraries: more than 65,535 files, the plain zip limit
+}
+
+// Benchmark checks in every build: BenchmarksRunTest runs every benchmark once, so a broken one fails the build;
+// BenchmarkRuleTest reads the compiled classes and requires a benchmark for every measured method the hot paths reach.
+// Both have their own source set, so JUnit stays out of the benchmark jar.
+sourceSets {
+    jmhTest {
+        compileClasspath += sourceSets.jmh.output + sourceSets.jmh.compileClasspath
+        runtimeClasspath += sourceSets.jmh.output + sourceSets.jmh.runtimeClasspath
+        // The plugin generates JMH's harness classes and META-INF/BenchmarkList in tasks of its own, outside the
+        // jmh source set's output; the Runner needs both. files(task) also makes jmhTest depend on those tasks.
+        runtimeClasspath += files(tasks.named('jmhRunBytecodeGenerator'), tasks.named('jmhCompileGeneratedClasses'))
     }
+}
+
+// The hot roots: methods the loader calls per tick or per network message, and the codecs of the registered payloads
+// (Class#STREAM_CODEC). Every measured method they reach must be reached by a benchmark too. A new hot path adds a line.
+def hotRoots = [
+    'io.github.foursource.scoreline.client.ScorelineClient#onTick',
+    'io.github.foursource.scoreline.client.ScorelineClient#onHello',
+    'io.github.foursource.scoreline.client.ScorelineClient#onStatsResponse',
+    'io.github.foursource.scoreline.server.ScorelineServer#onStatsRequest',
+    'io.github.foursource.scoreline.net.payload.HelloPayload#STREAM_CODEC',
+    'io.github.foursource.scoreline.net.payload.StatsRequestPayload#STREAM_CODEC',
+    'io.github.foursource.scoreline.net.payload.StatsResponsePayload#STREAM_CODEC',
+]
+
+dependencies {
+    jmhTestImplementation(libs.asm)
+    jmhTestImplementation(platform(libs.junit.bom))
+    jmhTestImplementation(libs.junit.jupiter)
+    jmhTestRuntimeOnly(libs.junit.platform.launcher)
+}
+
+def jmhTest = tasks.register('jmhTest', Test) {
+    description = 'Runs every JMH benchmark once, in-process, and checks that the hot paths are benchmarked.'
+    group = 'verification'
+    testClassesDirs = sourceSets.jmhTest.output.classesDirs
+    classpath = sourceSets.jmhTest.runtimeClasspath
+    useJUnitPlatform()
+    // Minecraft's logging configuration writes logs/latest.log into the working directory; keep it out of the sources
+    def workDir = layout.buildDirectory.dir('jmhTest').get().asFile
+    workingDir = workDir
+    doFirst { workDir.mkdirs() }
+    // For BenchmarkRuleTest: where the compiled classes are, which classes are measured, and where the hot paths start
+    inputs.files(sourceSets.main.output.classesDirs)
+    systemProperty 'scoreline.mainClasses', sourceSets.main.output.classesDirs.asPath
+    systemProperty 'scoreline.benchmarkClasses', sourceSets.jmh.output.classesDirs.asPath
+    systemProperty 'scoreline.coverageExcludes', coverageExcludes.join(',')
+    systemProperty 'scoreline.hotRoots', hotRoots.join(',')
+}
+
+tasks.named('check') {
+    dependsOn jmhTest
+}
+
+// Mutation testing: PIT changes the measured classes in small ways and checks that a unit test notices.
+// Not part of check: it takes about a minute, so it runs where logic code changed and before a release.
+// Every run tests all mutants (open-source PIT keeps no history). The same exclusions as the coverage gate, so the two never disagree.
+pitest {
+    pitestVersion = libs.versions.pitest.core.get()
+    junit5PluginVersion = libs.versions.pitest.junit5.get()
+    targetClasses = ['io.github.foursource.scoreline.*']
+    excludedClasses = coverageExcludes.collectMany { [it.replace('/', '.'), it.replace('/', '.') + '$*'] }
+    targetTests = ['io.github.foursource.scoreline.*']
+    // Fuzz tests replay saved inputs only; they add nothing to the mutation score but time
+    excludedTestClasses = ['*FuzzTest']
+    enableDefaultIncrementalAnalysis = false
+    outputFormats = ['HTML', 'XML']
+    timestampedReports = false
+    threads = 4
+    mutationThreshold = 100  // every mutant must be killed; code that would only give equivalent mutants is written without them
 }

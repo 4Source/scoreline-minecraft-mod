@@ -1,15 +1,7 @@
 plugins {
     id 'java-library'
     id 'maven-publish'
-    id 'com.diffplug.spotless'
-}
-
-// Code style: every Java file must match the Eclipse formatter profile that VS Code uses too.
-// spotlessCheck runs as part of check; spotlessApply reformats the files.
-spotless {
-    java {
-        eclipse('4.41').configFile(rootProject.file('config/eclipse-formatter.xml'))
-    }
+    id 'scoreline-style'
 }
 
 base {
@@ -80,13 +72,13 @@ processResources {
 publishing {
     publications {
         register('mavenJava', MavenPublication) {
-            artifactId base.archivesName.get()
+            artifactId = base.archivesName.get()
             from components.java
         }
     }
     repositories {
         maven {
-            url System.getenv('local_maven_url')
+            url = System.getenv('local_maven_url')
         }
     }
 }

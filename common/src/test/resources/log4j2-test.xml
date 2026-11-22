@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Log4j configuration for everything that runs on common's test classpath (unit tests, GoldenWriter).
+    Log4j prefers log4j2-test.xml over the log4j2.xml in Mojang's logging library, whose file appender
+    would write logs/latest.log into the module folder. This one logs to the console only.
+-->
+<Configuration status="WARN">
+    <Appenders>
+        <Console name="SysOut" target="SYSTEM_OUT">
+            <PatternLayout pattern="[%d{HH:mm:ss}] [%t/%level]: %msg{nolookups}%n" />
+        </Console>
+    </Appenders>
+    <Loggers>
+        <Root level="info">
+            <AppenderRef ref="SysOut" />
+        </Root>
+    </Loggers>
+</Configuration>

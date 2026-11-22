@@ -9,14 +9,20 @@ on:
 permissions:
   contents: read
 
+env:
+  ORG_GRADLE_PROJECT_spark_curseforge_file_id: ""
+
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
-      - name: Check out
+      - name: Check out with tags
         uses: actions/checkout@v7
+        with:
+          # The released-goldens check compares with the last release tag
+          fetch-depth: 0
 
       - name: Set up Java
         uses: actions/setup-java@v6
@@ -27,11 +33,27 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
+      - name: Check the scripts
+        run: shellcheck scripts/*.sh
+
+      # A protocol version folder that any release contains never changes
+      - name: Check that released example messages are unchanged
+        run: |
+          for tag in $(git tag --list 'v*'); do
+            for folder in $(git ls-tree -d --name-only "$tag" common/src/test/resources/protocol/); do
+              if ! git diff --exit-code --stat "$tag" -- "$folder"; then
+                echo "::error::$folder is part of the release $tag, so its example messages must not change"
+                exit 1
+              fi
+            done
+          done
+
       - name: Build
         run: ./gradlew build
 
-      - name: Smoke run
-        run: scripts/smoke.sh
+      # A failing game test makes the run exit non-zero; the smoke test with the built jar runs nightly and before a release
+      - name: Game tests
+        run: ./gradlew :neoforge:runGameTestServer
 
       - name: Upload jars
         uses: actions/upload-artifact@v7
@@ -48,3 +70,4 @@ jobs:
           path: |
             common/build/reports
             neoforge/runs/gametest/logs
+            neoforge/build/reports/jacoco/gameTestCoverageReport

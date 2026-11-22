@@ -3,8 +3,14 @@ plugins {
     id 'net.neoforged.moddev'
 }
 
+sourceSets {
+    gametest
+}
+
 neoForge {
     version = neoforge_version
+    addModdingDependenciesTo sourceSets.gametest
+
     // Automatically enable neoforge AccessTransformers if the file exists
     def at = project(':common').file('src/main/resources/META-INF/accesstransformer.cfg')
     if (at.exists()) {
@@ -12,7 +18,6 @@ neoForge {
     }
     runs {
         configureEach {
-            systemProperty('neoforge.enabledGameTestNamespaces', mod_id)
             ideName = "NeoForge ${it.name.capitalize()} (${project.path})"
         }
         client {
@@ -34,16 +39,57 @@ neoForge {
         gameTestServer {
             type = "gameTestServer"
             gameDirectory = this.mkdir(this.file('runs/gametest'))
+            sourceSet = sourceSets.gametest
+            programArguments.addAll '--tests', 'scoreline:*'
+        }
+        // // The manual profiling run: only LoadTest is registered, 50 mock players asking for 30 s. Java Flight
+        // Recorder's method timing (Java 25) counts and times the calls of Scoreline's server-side classes without any code in
+        // the mod; the table is printed when the server exits, and build/perf/profile.jfr opens in Java Mission Control.
+        // Started by hand, never in a check.
+        profileServer {
+            type = "gameTestServer"
+            gameDirectory = this.mkdir(this.file('runs/profile'))
+            sourceSet = sourceSets.gametest
+            systemProperty 'scoreline.loadTest', 'true'
+            programArguments.addAll '--tests', 'scoreline:t108_load_50_players'
+            def timed = ['server.ScorelineServer', 'net.RequestGate', 'net.RequestBudget'].collect { "${project.group}.${mod_id}.${it}" }.join(';')
+            jvmArgument "-XX:StartFlightRecording=filename=${this.file('build/perf/profile.jfr').absolutePath},method-timing=${timed},report-on-exit=method-timing,dumponexit=true"
         }
     }
     mods {
         "${mod_id}" {
             sourceSet sourceSets.main
+            sourceSet sourceSets.gametest
         }
     }
 }
 
+repositories {
+    exclusiveContent {
+        forRepository { maven { url = 'https://cursemaven.com' } }
+        filter { includeGroup 'curse.maven' }
+    }
+}
+
+configurations {
+    localRuntime
+    runtimeClasspath.extendsFrom localRuntime
+}
+
+dependencies {
+    gametestImplementation sourceSets.main.output
+    if (spark_curseforge_file_id) {
+        localRuntime "curse.maven:spark-361579:${spark_curseforge_file_id}"
+    }
+}
+
 sourceSets.main.resources { srcDir 'src/generated/resources' }
+
+// JFR refuses to start (and the JVM with it) if the recording's folder does not exist
+tasks.named('runProfileServer') {
+    def perfDir = file('build/perf')
+    doFirst { perfDir.mkdirs() }
+}
 
 // Implement mcgradleconventions loader attribute
 def loaderAttribute = Attribute.of('io.github.mcgradleconventions.loader', String)
@@ -63,3 +109,85 @@ sourceSets.configureEach {
         }
     }
 }
+
+// Coverage of the game-test run, a report only, never a gate: ScorelineServer and the loader glue are outside
+// common's coverage gate, and this shows which of their lines the game tests reach. JaCoCo's agent records the
+// run into build/jacoco/gameTest.exec; the report matches the classes by their bytes, which ModLauncher loads unchanged.
+apply plugin: 'jacoco'
+def gameTestExec = layout.buildDirectory.file('jacoco/gameTest.exec')
+// The jacocoAgent configuration holds a jar that contains the agent jar; unpack it once
+def jacocoAgentDir = layout.buildDirectory.dir('jacocoAgent')
+def extractJacocoAgent = tasks.register('extractJacocoAgent', Sync) {
+    from(zipTree(configurations.jacocoAgent.singleFile)) { include 'jacocoagent.jar' }
+    into jacocoAgentDir
+}
+tasks.named('prepareGameTestServerRun') { dependsOn extractJacocoAgent }
+neoForge.runs.named('gameTestServer') {
+    jvmArguments.add(provider {
+        "-javaagent:${jacocoAgentDir.get().file('jacocoagent.jar').asFile.absolutePath}=destfile=${gameTestExec.get().asFile.absolutePath},includes=io.github.foursource.*".toString()
+    })
+}
+def gameTestCoverageReport = tasks.register('gameTestCoverageReport', JacocoReport) {
+    description = 'Writes the coverage report of the last game-test run.'
+    group = 'verification'
+    executionData gameTestExec
+    classDirectories.setFrom(sourceSets.main.output.classesDirs)
+    sourceDirectories.setFrom(sourceSets.main.java.srcDirs, project(':common').file('src/main/java'))
+    reports {
+        html.required = true
+        xml.required = true
+    }
+    onlyIf { gameTestExec.get().asFile.exists() }
+}
+tasks.named('runGameTestServer') {
+    // The agent appends to an existing file, so each run starts empty
+    doFirst { gameTestExec.get().asFile.delete() }
+    finalizedBy gameTestCoverageReport
+}
+
+// Jar check: opens the built jar and fails, naming what it found, unless the metadata carries the version
+// from gradle.properties and no unfilled placeholder, every service registration names a class in the jar, and no
+// game-test or spark class is packed. Seconds, without starting Minecraft; the smoke test then starts the jar.
+def checkJar = tasks.register('checkJar') {
+    description = 'Checks the contents of the built mod jar.'
+    group = 'verification'
+    def jarFile = tasks.named('jar').flatMap { it.archiveFile }
+    def expectedVersion = project.version.toString()
+    inputs.file(jarFile)
+    doLast {
+        def problems = []
+        new java.util.zip.ZipFile(jarFile.get().asFile).withCloseable { zip ->
+            def names = zip.entries().collect { it.name } as Set
+            def toml = zip.getEntry('META-INF/neoforge.mods.toml')
+            if (toml == null) {
+                problems << 'META-INF/neoforge.mods.toml is missing'
+            } else {
+                def text = zip.getInputStream(toml).getText('UTF-8')
+                if (text.contains('${')) {
+                    problems << "META-INF/neoforge.mods.toml has an unfilled placeholder: ${text.find(/\$\{[^}]*\}/)}"
+                }
+                if (!text.contains("version = \"${expectedVersion}\"") && !text.contains("version=\"${expectedVersion}\"")) {
+                    problems << "META-INF/neoforge.mods.toml does not carry the version ${expectedVersion}"
+                }
+            }
+            def services = names.findAll { it.startsWith('META-INF/services/') && !it.endsWith('/') }
+            if (services.isEmpty()) {
+                problems << 'META-INF/services/ holds no service registration'
+            }
+            services.each { service ->
+                zip.getInputStream(zip.getEntry(service)).getText('UTF-8').readLines()*.trim().findAll { it && !it.startsWith('#') }.each { impl ->
+                    if (!names.contains(impl.replace('.', '/') + '.class')) {
+                        problems << "${service} names ${impl}, which is not in the jar"
+                    }
+                }
+            }
+            names.findAll { it.startsWith('io/github/foursource/scoreline/gametest/') || it.startsWith('me/lucko/') }.each {
+                problems << "${it} must not be in the mod jar"
+            }
+        }
+        if (!problems.isEmpty()) {
+            throw new GradleException("Jar check failed for ${jarFile.get().asFile.name}:\n  " + problems.join('\n  '))
+        }
+    }
+}
+tasks.named('check') { dependsOn checkJar }

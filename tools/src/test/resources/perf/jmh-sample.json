@@ -1,0 +1,135 @@
+[
+    {
+        "jmhVersion": "1.37",
+        "benchmark": "io.github.foursource.scoreline.net.RequestGateBenchmark.admit",
+        "mode": "avgt",
+        "threads": 1,
+        "forks": 1,
+        "jvm": "java",
+        "jvmArgs": [],
+        "jdkVersion": "25.0.1",
+        "vmName": "Java HotSpot(TM) 64-Bit Server VM",
+        "vmVersion": "25.0.1+8-LTS-27",
+        "warmupIterations": 3,
+        "warmupTime": "1 s",
+        "warmupBatchSize": 1,
+        "measurementIterations": 5,
+        "measurementTime": "1 s",
+        "measurementBatchSize": 1,
+        "params": {
+            "players": "50"
+        },
+        "primaryMetric": {
+            "score": 80.06238943969305,
+            "scoreError": 9.680140450807952,
+            "scoreConfidence": [
+                70.3822489888851,
+                89.742529890501
+            ],
+            "scoreUnit": "ns/op"
+        },
+        "secondaryMetrics": {
+            "gc.alloc.rate": {
+                "score": 3718.387449934541,
+                "scoreError": 446.9796827767442,
+                "scoreConfidence": [
+                    3271.407767157797,
+                    4165.367132711285
+                ],
+                "scoreUnit": "MB/sec"
+            },
+            "gc.alloc.rate.norm": {
+                "score": 312.0005575568098,
+                "scoreError": 6.779740902841669e-05,
+                "scoreConfidence": [
+                    312.00048975940075,
+                    312.0006253542188
+                ],
+                "scoreUnit": "B/op"
+            },
+            "gc.count": {
+                "score": 25.0,
+                "scoreError": "NaN",
+                "scoreConfidence": [
+                    25.0,
+                    25.0
+                ],
+                "scoreUnit": "counts"
+            },
+            "gc.time": {
+                "score": 16.0,
+                "scoreError": "NaN",
+                "scoreConfidence": [
+                    16.0,
+                    16.0
+                ],
+                "scoreUnit": "ms"
+            }
+        }
+    },
+    {
+        "jmhVersion": "1.37",
+        "benchmark": "io.github.foursource.scoreline.net.RequestTimerBenchmark.shouldSend",
+        "mode": "avgt",
+        "threads": 1,
+        "forks": 1,
+        "jvm": "java",
+        "jvmArgs": [],
+        "jdkVersion": "25.0.1",
+        "vmName": "Java HotSpot(TM) 64-Bit Server VM",
+        "vmVersion": "25.0.1+8-LTS-27",
+        "warmupIterations": 3,
+        "warmupTime": "1 s",
+        "warmupBatchSize": 1,
+        "measurementIterations": 5,
+        "measurementTime": "1 s",
+        "measurementBatchSize": 1,
+        "primaryMetric": {
+            "score": 8.019404302391205,
+            "scoreError": 0.8303877309916262,
+            "scoreConfidence": [
+                7.189016571399579,
+                8.849792033382831
+            ],
+            "scoreUnit": "ns/op"
+        },
+        "secondaryMetrics": {
+            "gc.alloc.rate": {
+                "score": 9517.390802854941,
+                "scoreError": 986.2719225416082,
+                "scoreConfidence": [
+                    8531.118880313334,
+                    10503.662725396549
+                ],
+                "scoreUnit": "MB/sec"
+            },
+            "gc.alloc.rate.norm": {
+                "score": 80.00005590873116,
+                "scoreError": 5.474912512754096e-06,
+                "scoreConfidence": [
+                    80.00005043381864,
+                    80.00006138364367
+                ],
+                "scoreUnit": "B/op"
+            },
+            "gc.count": {
+                "score": 54.0,
+                "scoreError": "NaN",
+                "scoreConfidence": [
+                    54.0,
+                    54.0
+                ],
+                "scoreUnit": "counts"
+            },
+            "gc.time": {
+                "score": 27.0,
+                "scoreError": "NaN",
+                "scoreConfidence": [
+                    27.0,
+                    27.0
+                ],
+                "scoreUnit": "ms"
+            }
+        }
+    }
+]

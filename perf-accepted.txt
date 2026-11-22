@@ -1,0 +1,5 @@
+# Accepted performance regressions of the next release.
+# One line per metric: its key as the comparison table shows it, a tab, the reason. Add one with
+#   scripts/accept-regression.sh 'ProtocolBenchmark.encodeHello (time)' 'the hello carries the stat definitions now'
+# in the pull request that causes the regression. The pull request, nightly and release comparisons then report it as
+# ACCEPTED instead of failing; the release commit empties the list (comment lines stay).

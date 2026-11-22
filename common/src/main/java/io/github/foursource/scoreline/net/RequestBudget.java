@@ -49,17 +49,15 @@ public final class RequestBudget {
             started = true;
         }
 
-        // Full intervals since the reference time; the division rounds down, so a partial interval gives nothing yet
-        long potentialRefills = (nowMillis - referenceMillis) / refillIntervalMillis;
+        // Full intervals since the reference time; the division rounds down, so a partial interval gives nothing yet.
+        // A clock that went backwards gives a negative count, which means no time passed, so it is raised to 0.
+        long potentialRefills = Math.max(0, (nowMillis - referenceMillis) / refillIntervalMillis);
 
-        // Zero or negative when no full interval has passed or the clock went backwards; both mean no time passed
-        if (potentialRefills > 0) {
-            tokens = (int) Math.min(tokens + potentialRefills, capacity);
-
-            // Advance by the full intervals used; the remainder counts towards the next
-            // token; intervals beyond the capacity are used up too, so they are not paid out later
-            referenceMillis += potentialRefills * refillIntervalMillis;
-        }
+        // With no full interval both lines change nothing
+        tokens = (int) Math.min(tokens + potentialRefills, capacity);
+        // Advance by the full intervals used; the remainder counts towards the next
+        // token; intervals beyond the capacity are used up too, so they are not paid out later
+        referenceMillis += potentialRefills * refillIntervalMillis;
 
         if (tokens > 0) {
             tokens--;

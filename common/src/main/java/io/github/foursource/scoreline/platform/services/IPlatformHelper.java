@@ -1,5 +1,8 @@
 package io.github.foursource.scoreline.platform.services;
 
+/**
+ * Loader-specific behavior that common code needs. Each loader implements it; {@link io.github.foursource.scoreline.platform.Services#PLATFORM} holds the instance.
+ */
 public interface IPlatformHelper {
 
     /**

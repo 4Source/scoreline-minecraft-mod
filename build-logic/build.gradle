@@ -8,5 +8,5 @@ repositories {
 
 dependencies {
     // Spotless checks the code style; the convention plugins apply it by ID.
-    implementation 'com.diffplug.spotless:spotless-plugin-gradle:8.11.0'
+    implementation(libs.spotless.plugin.gradle)
 }

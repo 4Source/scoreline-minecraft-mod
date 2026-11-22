@@ -1,0 +1,8 @@
+// build-logic is a build of its own, so it does not see the main build's version catalog by itself
+dependencyResolutionManagement {
+    versionCatalogs {
+        libs {
+            from(files('../gradle/libs.versions.toml'))
+        }
+    }
+}

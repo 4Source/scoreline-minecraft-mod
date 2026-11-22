@@ -1,0 +1,296 @@
+name: Thorough checks
+
+# The slower checks, run where they matter instead of on every push:
+# - on a pull request: allocation compared with the base (blocking), mutation testing if logic code changed, fuzzing if
+#   payload code changed. Every job always runs and ends green when it has nothing to check, because a required check
+#   whose workflow was skipped would block the merge forever.
+# - nightly on master, only if it changed since the last nightly run: time and allocation, the smoke test with the built
+#   jar and the load run (every request answered; its timings are uploaded, never compared); a failure opens an issue.
+# - a manual button for either mode, with an optional baseline (a tag or commit).
+on:
+    pull_request:
+    schedule:
+        - cron: '23 2 * * *'
+    workflow_dispatch:
+        inputs:
+            mode:
+                description: 'pull-request: allocation only, against the baseline; nightly: time, allocation, smoke test and load run'
+                type: choice
+                options: [nightly, pull-request]
+                default: nightly
+            baseline:
+                description: 'Baseline tag or commit; empty: the last checked commit (nightly) or the parent of HEAD'
+                type: string
+                default: ''
+
+permissions:
+  contents: read
+
+env:
+  ORG_GRADLE_PROJECT_spark_curseforge_file_id: ""
+
+jobs:
+  performance:
+    if: ${{ github.event_name == 'pull_request' || inputs.mode == 'pull-request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out with full history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 25
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Compare allocation with the baseline
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || inputs.baseline || 'HEAD~1' }}
+        run: |
+          # A base from before the benchmarks existed has nothing to compare with
+          if ! git cat-file -e "$BASE:common/src/jmh" 2> /dev/null; then
+            export ALLOW_NO_BASELINE=1
+          fi
+          scripts/compare-performance.sh --allocation-only --accepted perf-accepted.txt "$BASE"
+
+      - name: Write the table into the job summary
+        if: always()
+        run: cat build/perf/comparison.md >> "$GITHUB_STEP_SUMMARY" 2> /dev/null || echo "No comparison was written" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance
+          path: |
+            build/perf
+            !build/perf/baseline-src/**
+          if-no-files-found: ignore
+
+  mutation:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out with full history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Did logic code or its tests change?
+        id: changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # Tests count too: a pull request that weakens a test is exactly what mutation testing catches
+          if git diff --name-only "$BASE...HEAD" | grep -qE '^(common|tools)/src/(main|test)/'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No logic code or tests changed: nothing to mutate" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Set up Java
+        if: steps.changes.outputs.run == 'true'
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 25
+
+      - name: Set up Gradle
+        if: steps.changes.outputs.run == 'true'
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Mutation testing
+        if: steps.changes.outputs.run == 'true'
+        run: ./gradlew :common:pitest :tools:pitest
+
+      - name: Upload the reports
+        if: always() && steps.changes.outputs.run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutation-reports
+          path: |
+            common/build/reports/pitest
+            tools/build/reports/pitest
+
+  fuzzing:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out with full history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Did payload code change?
+        id: changes
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git diff --name-only "$BASE...HEAD" | grep -q '^common/src/main/java/io/github/foursource/scoreline/net/payload/'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No payload code changed: nothing to fuzz" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Set up Java
+        if: steps.changes.outputs.run == 'true'
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 25
+
+      - name: Set up Gradle
+        if: steps.changes.outputs.run == 'true'
+        uses: gradle/actions/setup-gradle@v6
+
+      # Jazzer fuzzes one @FuzzTest per run, so each target gets its own; each runs for its maxDuration (120 s)
+      - name: Fuzz each decoder
+        if: steps.changes.outputs.run == 'true'
+        env:
+          JAZZER_FUZZ: 1
+        run: |
+          for target in StatsRequestPayloadFuzzTest StatsResponsePayloadFuzzTest HelloPayloadFuzzTest; do
+            ./gradlew :common:test --tests "*$target"
+          done
+
+      # A finding is written next to the saved inputs; it is added there with the fix
+      - name: Upload the crashing input
+        if: failure() && steps.changes.outputs.run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzzing-findings
+          path: common/src/test/resources/**/*Inputs/**/crash-*
+
+  nightly:
+    if: ${{ github.event_name == 'schedule' || inputs.mode == 'nightly' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out with full history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # The last checked commit is kept as a file in a cache entry, so no commit to master is needed
+      - name: Restore the last checked commit
+        uses: actions/cache/restore@v6
+        with:
+          path: build/nightly
+          key: nightly-checked-${{ github.sha }}
+          restore-keys: nightly-checked-
+
+      - name: Decide the baseline
+        id: baseline
+        env:
+          INPUT: ${{ inputs.baseline }}
+        run: |
+          last=$(cat build/nightly/last-checked 2> /dev/null || true)
+          if [ -z "$INPUT" ] && [ "$last" = "$GITHUB_SHA" ]; then
+            echo "master has not changed since the last nightly run ($last): nothing to check" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "ref=${INPUT:-${last:-HEAD~1}}" >> "$GITHUB_OUTPUT"
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Java
+        if: steps.baseline.outputs.run == 'true'
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 25
+
+      - name: Set up Gradle
+        if: steps.baseline.outputs.run == 'true'
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Compare time and allocation
+        id: compare
+        if: steps.baseline.outputs.run == 'true'
+        env:
+          BASE: ${{ steps.baseline.outputs.ref }}
+        run: |
+          if ! git cat-file -e "$BASE:common/src/jmh" 2> /dev/null; then
+            export ALLOW_NO_BASELINE=1
+          fi
+          scripts/compare-performance.sh --accepted perf-accepted.txt "$BASE"
+
+      - name: Build the jar
+        id: build
+        if: always() && steps.baseline.outputs.run == 'true'
+        run: ./gradlew build
+
+      - name: Smoke test with the built jar
+        id: smoke
+        if: always() && steps.build.outcome == 'success'
+        run: scripts/smoke.sh
+
+      # 50 mock players for 30 s must get every answer; the timings it prints are uploaded, never compared
+      - name: Load run
+        id: load
+        if: always() && steps.build.outcome == 'success'
+        run: ./gradlew :neoforge:runProfileServer
+
+      - name: Write the summary
+        if: always() && steps.baseline.outputs.run == 'true'
+        run: cat build/perf/comparison.md >> "$GITHUB_STEP_SUMMARY" 2> /dev/null || echo "No comparison was written" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open an issue on a failure
+        if: failure() && steps.baseline.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ steps.baseline.outputs.ref }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "The nightly checks of $GITHUB_SHA failed: performance comparison ${{ steps.compare.outcome }}, smoke test ${{ steps.smoke.outcome }}, load run ${{ steps.load.outcome }}."
+            echo
+            echo "Run: $RUN_URL"
+            echo
+            echo "Commits since the last checked one ($BASE):"
+            git log --oneline "$BASE..$GITHUB_SHA" | sed 's/^/- /'
+            echo
+            cat build/perf/comparison.md 2> /dev/null || true
+            if [ -f build/smoke-server/console.log ]; then
+              echo
+              echo "End of the smoke test's server log:"
+              echo '```'
+              tail -n 40 build/smoke-server/console.log
+              echo '```'
+            fi
+          } > issue.md
+          gh issue create --title "Nightly checks failed on $(git rev-parse --short HEAD)" --body-file issue.md
+
+      - name: Remember the checked commit
+        if: always() && steps.baseline.outputs.run == 'true'
+        run: |
+          mkdir -p build/nightly
+          echo "$GITHUB_SHA" > build/nightly/last-checked
+
+      - name: Save the checked commit
+        if: always() && steps.baseline.outputs.run == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: build/nightly
+          key: nightly-checked-${{ github.sha }}
+
+      - name: Upload the results
+        if: always() && steps.baseline.outputs.run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly
+          path: |
+            build/perf
+            !build/perf/baseline-src/**
+            neoforge/build/perf/profile.jfr
+          if-no-files-found: ignore
