@@ -84,6 +84,7 @@ The project uses the MultiLoader Template: almost all code lives in a shared mod
 - Loader modules contain no logic, only registration.
 - Components that may be replaced later sit behind an interface: `ClientSettings` and `ServerSettings` (config), `HistoryStore` (storage), stat providers (data sources).
 - Code that needs no Minecraft classes (encoding, levels, rate limiting, baseline and decrease rules) is kept free of them so it can be unit tested.
+- Shared code may use Minecraft classes, but never reaches global game state itself (the loader's services, the client or server singleton). It gets what it needs (network access, the online players, key state, the time) as parameters from the loader module, so it can be unit tested with fakes.
 - Code that decides what to draw is kept apart from the code that draws (see Testing).
 
 **Dependencies**
@@ -740,7 +741,7 @@ Everything that decides something is tested by machine; only the thin layer that
 
 | Kind | What it covers | How |
 | --- | --- | --- |
-| Unit tests | Encoding, levels, retention, baseline and decrease rules, recorded-set changes, request budget, format presets, config validation, layout decisions; from v0.10 the overload rules of the history hand-over queue, step by step | JUnit in `common`, no Minecraft needed; time is passed in, so tests run on a fake clock |
+| Unit tests | Encoding, levels, retention, baseline and decrease rules, recorded-set changes, request budget, format presets, config validation, layout decisions, the server's and client's protocol handling; from v0.10 the overload rules of the history hand-over queue, step by step | JUnit in `common`, with fakes for the loader's services; Minecraft classes allowed, no running game; time is passed in, so tests run on a fake clock |
 | Property tests (from v0.10) | Rules that must always hold, for example "a tile's start value plus its differences equals the next tile's start value" and "all levels show the same total at a shared boundary". Until then, the fuzzers' round trip ("what decodes, re-encodes to the same payload") is the property test of the codecs | Thousands of random inputs per rule |
 | Protocol compatibility | Today's code reads the messages of every earlier protocol version, and (from v1.0) earlier releases read today's messages | Stored example messages per protocol version (golden files), read by one generic test; see Mixed mod versions and Gates |
 | Simulation, correctness run (v0.10) | The history engine over more than a year: every tile of every level is created, closed, packed and deleted, across a year boundary and every retention limit; scripted events (crash, restored backup, a mode set to Off, a clock jump, overload); exact sizes (bytes per stored change, files per player) | Plain Java on a fake clock with a few players; every result is compared with a simple in-memory record of the true values |
@@ -765,7 +766,7 @@ The individual test cases, including boundaries, invalid input and failure cases
 
 - Every test must pass before a change is merged.
 - Coverage gate on the logic code: at least 95% of lines and 90% of branches. Logic code is everything that decides something: encoding, levels, protocol, settings, layout decisions and the API.
-- The drawing layer and the loader glue are excluded from the gate, because by design they hold no logic.
+- The drawing layer and the loader glue are excluded from the gate, because by design they hold no logic. Shared code that talks to the game is not excluded: it gets the game's objects passed in, so unit tests reach it.
 - The development tools (`tools`, for example the performance comparison) have a stricter gate: 100% of lines and branches. They are small, and they decide whether a pull request fails. Only a launcher whose sole job is to exit the process with the result is excluded.
 - Every method of the logic code that the hot paths reach is also reached by a benchmark. The hot paths start at a short list of loader listeners that run per tick or per network message; everything they call is hot, and code that runs only at startup or on a command is not. A static check of the compiled classes enforces this in every build; code that only prepares a benchmark's input does not count. Benchmarks measure operations, so one benchmark covers every helper its operation calls.
 - Performance is compared, not measured against fixed numbers. Shared build machines are too noisy for numbers stored over months: one study measured 26% to 81% false alarms for naive regression checks in the cloud ([Laaber et al.](https://research.chalmers.se/en/publication/?id=511491)). Medians are stable, and two versions run side by side on the same machine compare well. So the performance job runs the old and the new version in the same job, alternating, and compares medians. The benchmarks stay runnable against any earlier tag, which is the baseline for later work.
@@ -790,7 +791,7 @@ The individual test cases, including boundaries, invalid input and failure cases
 | Behaviour on the server | Game tests, including tests that pin down the vanilla behaviour Scoreline relies on, for example "a mock player's death raises the deaths stat by one and the change hook sees it" | A failing game test |
 | The look or layout of the TAB list or screens | Nothing automatic | The screenshots of the client startup check, which a person looks at before merging |
 
-- The unit tests in `common` do not touch Minecraft and say nothing about compatibility.
+- The unit tests in `common` do not run the game and say little about compatibility: they only show that the Minecraft classes they use still compile and behave the same outside a running game.
 - The client startup check starts a real client once with the built jar, just far enough to confirm that Scoreline loaded with the right version and all client hooks attach, and takes the screenshots. It then joins a local vanilla server (offline mode) and a local modded server in turn, and quits. It passes when the client's log shows no request on the vanilla server and a response on the modded one. Nothing else is compared automatically: on a new Minecraft or YACL version, and when the drawing code changed, a person looks at the screenshots in the pull request before merging. It needs the vanilla server jar from Mojang, whose EULA the workflow accepts. How it runs on a build machine (a virtual display, or a lighter launch if NeoForge offers one) is decided in v0.3.
 - Each mod file declares the Minecraft line it supports, for example 26.3.x. Patch versions need nothing; a new line such as 26.4 always needs a new release.
 - Green pull request: look at the screenshots and press release, no code changes. Red pull request: the log shows what broke.
