@@ -82,5 +82,5 @@ pitest {
     outputFormats = ['HTML', 'XML']
     timestampedReports = false
     threads = 4
-    mutationThreshold = 95   // the first run's score (99 %) rounded down to the next 5 %; only equivalent mutants survive
+    mutationThreshold = 100  // every mutant must be killed; code that would only give equivalent mutants is written without them
 }
