@@ -35,3 +35,5 @@ Guides for players and server admins, plus versioned Stats API documentation for
 ## Contributing
 
 Bug reports and feature requests are welcome in the [issue tracker](https://github.com/4Source/scoreline-minecraft-mod/issues). If you want to work on something larger, please open an issue first so we can talk about the approach.
+
+TEMPORARY
