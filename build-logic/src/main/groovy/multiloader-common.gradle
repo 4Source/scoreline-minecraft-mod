@@ -8,7 +8,7 @@ plugins {
 // spotlessCheck runs as part of check; spotlessApply reformats the files.
 spotless {
     java {
-        eclipse('4.41').configFile(rootProject.file('config/eclipse-formatter.xml'))
+        eclipse(versionCatalogs.named('libs').findVersion('eclipse-formatter').get().requiredVersion).configFile(rootProject.file('config/eclipse-formatter.xml'))
     }
 }
 

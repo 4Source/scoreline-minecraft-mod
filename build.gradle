@@ -1,7 +1,7 @@
 plugins {
-    // see https://projects.neoforged.net/neoforged/moddevgradle for new versions
-    id 'net.neoforged.moddev' version '2.0.147' apply false
+    // Versions in gradle/libs.versions.toml. ModDevGradle: see https://projects.neoforged.net/neoforged/moddevgradle
+    alias(libs.plugins.moddev) apply false
     // The JMH plugin for common's benchmarks. Declared here, not in common: a version in a subproject gives it a plugin
     // classloader of its own, and Spotless's shared build service then clashes between common and neoforge.
-    id 'me.champeau.jmh' version '0.7.4' apply false
+    alias(libs.plugins.jmh) apply false
 }
