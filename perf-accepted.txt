@@ -3,3 +3,5 @@
 #   scripts/accept-regression.sh 'ProtocolBenchmark.encodeHello (time)' 'the hello carries the stat definitions now'
 # in the pull request that causes the regression. The pull request, nightly and release comparisons then report it as
 # ACCEPTED instead of failing; the release commit empties the list (comment lines stay).
+ProtocolBenchmark.decodeStatsRequest (allocation)	T-196
+ProtocolBenchmark.decodeLargestStatsRequest (allocation)	T-196
