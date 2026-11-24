@@ -83,9 +83,9 @@ tasks.named('test') {
 // List single files only, never packages or name wildcards, so a new file is measured until someone decides otherwise.
 // Each entry says why unit tests cannot run the class. Paths are relative to the class output folder, without ".class".
 def coverageExcludes = [
-    // Needs a running client (Minecraft, the connection to the server)
+    // TODO: Gets the game passed in, but has no unit tests yet; the game tests run it
     'io/github/foursource/scoreline/client/ScorelineClient',
-    // Needs a running server; the game tests run it, and their coverage report (neoforge) shows which lines they reach
+    // TODO: Gets the game passed in, but has no unit tests yet; the game tests run it
     'io/github/foursource/scoreline/server/ScorelineServer',
     // Loads the loader's implementations through ServiceLoader when the class loads; common's tests have none
     'io/github/foursource/scoreline/platform/Services',

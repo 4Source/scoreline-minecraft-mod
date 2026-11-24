@@ -23,6 +23,7 @@ neoForge {
         client {
             client()
             gameDirectory = this.mkdir(this.file('runs/client'))
+            logLevel = org.slf4j.event.Level.DEBUG
         }
         data {
             clientData()
@@ -35,6 +36,7 @@ neoForge {
             server()
             this.file('runs/server').createParentDirectories()
             gameDirectory = this.mkdir(this.file('runs/server'))
+            logLevel = org.slf4j.event.Level.DEBUG
         }
         gameTestServer {
             type = "gameTestServer"

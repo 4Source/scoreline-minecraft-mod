@@ -2,28 +2,32 @@ package io.github.foursource.scoreline;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.slf4j.event.Level;
 
 import io.github.foursource.scoreline.platform.Services;
 
 /**
  * Shared entry point of Scoreline. Each loader module calls {@link #init(String)} once when the mod is loaded.
  * <p>
- * Code in {@code common} may use vanilla Minecraft only; loader-specific behavior goes through {@link io.github.foursource.scoreline.platform.Services}.
+ * Code in {@code common} may use vanilla Minecraft only. Loader-specific behavior is passed in by the loader module (for example a {@link io.github.foursource.scoreline.server.GameServer}); only
+ * start-up code like {@link #init(String)} reads it through {@link io.github.foursource.scoreline.platform.Services}.
  */
 public final class ScorelineCommon {
     /**
-     * The mod's logger, named after {@link Constants#MOD_NAME}.
+     * The mod's logger, named {@code scoreline}.
      */
-    public static final Logger LOG = LoggerFactory.getLogger(Constants.MOD_NAME);
-
+    public static final Logger LOG = LoggerFactory.getLogger(Constants.MOD_ID);
     /**
-     * Logs protocol traffic: at INFO in a development environment, so it shows in the dev console, and at DEBUG otherwise, so players' logs stay quiet.
+     * The logger for the network, named {@code scoreline.net}.
+     * <p>
+     * As a child of {@link #LOG}, it follows {@code scoreline}'s settings unless configured on its own.
      */
-    public static void logProtocol(String format, Object... args) {
-        Level level = Services.PLATFORM.isDevelopmentEnvironment() ? Level.INFO : Level.DEBUG;
-        LOG.atLevel(level).log(format, args);
-    }
+    public static final Logger NET_LOG = LoggerFactory.getLogger(Constants.MOD_ID + ".net");
+    /**
+     * The logger for payloads, named {@code scoreline.net.payload}.
+     * <p>
+     * As a child of {@link #NET_LOG}, it follows {@code scoreline}'s settings unless configured on its own.
+     */
+    public static final Logger PAYLOAD_LOG = LoggerFactory.getLogger(Constants.MOD_ID + ".net.payload");
 
     private ScorelineCommon() {}
 

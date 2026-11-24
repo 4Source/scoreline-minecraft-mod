@@ -3,6 +3,8 @@ package io.github.foursource.scoreline;
 import io.github.foursource.scoreline.client.ScorelineClient;
 import io.github.foursource.scoreline.net.payload.HelloPayload;
 import io.github.foursource.scoreline.net.payload.StatsResponsePayload;
+import io.github.foursource.scoreline.platform.NeoForgeServerConnection;
+import net.minecraft.client.Minecraft;
 import net.minecraft.util.Util;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
@@ -20,7 +22,7 @@ import net.neoforged.neoforge.common.NeoForge;
 @Mod(value = Constants.MOD_ID, dist = Dist.CLIENT)
 public final class ScorelineNeoForgeClient {
     /** The protocol's client side; one for the whole game session, reset on each disconnect. */
-    private final ScorelineClient client = new ScorelineClient();
+    private final ScorelineClient client;
 
     /**
      * Called by NeoForge when it loads the mod on the client.
@@ -28,10 +30,12 @@ public final class ScorelineNeoForgeClient {
      * @param modBus the mod's own event bus, for setup events such as registering payload handlers
      */
     public ScorelineNeoForgeClient(IEventBus modBus) {
+        client = new ScorelineClient(new NeoForgeServerConnection());
+
         modBus.addListener(this::registerClientPayloadHandlers);
 
         // The event class is given explicitly, so the subscription does not depend on reading the type from the lambda
-        NeoForge.EVENT_BUS.addListener(ClientTickEvent.Post.class, event -> client.onTick(Util.getMillis()));
+        NeoForge.EVENT_BUS.addListener(ClientTickEvent.Post.class, event -> client.onTick(Minecraft.getInstance().options.keyPlayerList.isDown(), Util.getMillis()));
         NeoForge.EVENT_BUS.addListener(ClientPlayerNetworkEvent.LoggingOut.class, event -> client.onDisconnect());
     }
 

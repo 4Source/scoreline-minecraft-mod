@@ -28,6 +28,11 @@ public class RequestTimer {
     private boolean previousTabState;
 
     /**
+     * Creates a timer with no server known yet, so it allows no request until a hello arrives.
+     */
+    public RequestTimer() {}
+
+    /**
      * Records the hello of a server that has the mod.
      * <p>
      * A later valid hello on the same connection replaces the earlier one. It is not a TAB press: the press state and the time of the last request are kept, so while TAB is held the next request is
