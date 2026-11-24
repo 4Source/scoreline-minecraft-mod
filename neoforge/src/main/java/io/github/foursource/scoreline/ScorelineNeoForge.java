@@ -3,6 +3,7 @@ package io.github.foursource.scoreline;
 import io.github.foursource.scoreline.net.payload.HelloPayload;
 import io.github.foursource.scoreline.net.payload.StatsRequestPayload;
 import io.github.foursource.scoreline.net.payload.StatsResponsePayload;
+import io.github.foursource.scoreline.platform.NeoForgeGameServer;
 import io.github.foursource.scoreline.server.ScorelineServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Util;
@@ -35,7 +36,7 @@ public final class ScorelineNeoForge {
     /**
      * The protocol's server side for the running server; {@code null} while no server runs. In singleplayer every world opened starts a new integrated server, so this is replaced each time.
      */
-    private ScorelineServer server;
+    private ScorelineServer<ServerPlayer> server;
 
     /**
      * Called by NeoForge when it loads the mod.
@@ -89,7 +90,7 @@ public final class ScorelineNeoForge {
      * @param event the server start event
      */
     private void onServerStarting(ServerStartingEvent event) {
-        server = new ScorelineServer();
+        server = new ScorelineServer<>(new NeoForgeGameServer(event.getServer()));
     }
 
     /**

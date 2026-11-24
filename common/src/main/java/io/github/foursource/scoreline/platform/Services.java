@@ -1,13 +1,12 @@
 package io.github.foursource.scoreline.platform;
 
 import io.github.foursource.scoreline.ScorelineCommon;
-import io.github.foursource.scoreline.platform.services.INetworkHelper;
-import io.github.foursource.scoreline.platform.services.IPlatformHelper;
+import io.github.foursource.scoreline.platform.services.Platform;
 
 import java.util.ServiceLoader;
 
 /**
- * Gives {@code common} code access to loader-specific behaviour.
+ * Gives {@code common} code access to loader-specific behavior.
  * <p>
  * Each loader module provides an implementation of every service interface and names it in a file under {@code META-INF/services/} whose name is the interface's fully qualified name. Java's
  * {@link ServiceLoader} picks up that implementation at runtime.
@@ -15,14 +14,9 @@ import java.util.ServiceLoader;
 public final class Services {
 
     /**
-     * The current loader's platform helper.
+     * The current loader's {@link Platform}.
      */
-    public static final IPlatformHelper PLATFORM = load(IPlatformHelper.class);
-
-    /**
-     * The current loader's network access: channel checks and sending payloads.
-     */
-    public static final INetworkHelper NETWORK = load(INetworkHelper.class);
+    public static final Platform PLATFORM = load(Platform.class);
 
     private Services() {}
 

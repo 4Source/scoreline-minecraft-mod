@@ -81,19 +81,10 @@ tasks.named('test') {
 
 // Coverage gate: every class of main is measured, except the files listed here.
 // List single files only, never packages or name wildcards, so a new file is measured until someone decides otherwise.
-// Each entry says why unit tests cannot run the class. Paths are relative to the class output folder, without ".class".
-def coverageExcludes = [
-    // Needs a running client (Minecraft, the connection to the server)
-    'io/github/foursource/scoreline/client/ScorelineClient',
-    // Needs a running server; the game tests run it, and their coverage report (neoforge) shows which lines they reach
-    'io/github/foursource/scoreline/server/ScorelineServer',
-    // Loads the loader's implementations through ServiceLoader when the class loads; common's tests have none
-    'io/github/foursource/scoreline/platform/Services',
-    // Its default method getEnvironmentName counts as code; it only formats an answer of the loader
-    'io/github/foursource/scoreline/platform/services/IPlatformHelper',
-    // Start-up and logging only
-    'io/github/foursource/scoreline/ScorelineCommon',
-]
+// An entry is drawing code or code that cannot exist without a running game; code that only reaches the game through
+// Services or a singleton gets the game passed in instead. Each entry says why unit tests cannot run the class.
+// Paths are relative to the class output folder, without ".class".
+def coverageExcludes = []
 
 // All compiled classes of main. A FileTree is lazy: Gradle evaluates it only when a task runs,
 // after compileJava has produced the classes.

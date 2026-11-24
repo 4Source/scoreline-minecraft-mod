@@ -18,8 +18,8 @@ import net.minecraft.network.codec.StreamCodec;
  * A codec works on a Netty {@code ByteBuf}, while a test wants plain {@code byte[]} to compare with {@code assertArrayEquals}. These methods do that conversion in one place, so each test reads as
  * "encode, compare with the golden, decode".
  */
-final class Wire {
-    private Wire() {}
+final class PayloadBytes {
+    private PayloadBytes() {}
 
     /**
      * Writes an ID list in the wire format of the request and the response, but without their limits. The payloads' own codecs check the limits when encoding too, so they cannot produce the oversized
@@ -48,10 +48,10 @@ final class Wire {
      * @throws IOException if the file cannot be read
      * @throws NullPointerException if the file does not exist
      */
-    static byte[] golden(int version, String name) throws IOException {
+    static byte[] readGolden(int version, String name) throws IOException {
         // Gradle puts src/test/resources on the test classpath; the leading "/" starts at its root
         String path = "/protocol/v" + version + "/" + name + ".bin";
-        try (InputStream in = Wire.class.getResourceAsStream(path)) {
+        try (InputStream in = PayloadBytes.class.getResourceAsStream(path)) {
             return Objects.requireNonNull(in, "golden file " + path + " not found").readAllBytes();
         }
     }

@@ -38,11 +38,11 @@ public class StatsResponsePayloadTest {
     @Test
     void t32_responseMatchesGoldenV1() throws IOException {
         StatsResponsePayload response = new StatsResponsePayload(TWO_IDS, List.of(new PlayerStats(A, List.of(72_000L, 3L)), new PlayerStats(B, List.of(4_000_000_000L, 0L))));
-        byte[] golden = Wire.golden(1, "stats_response");
+        byte[] golden = PayloadBytes.readGolden(1, "stats_response");
 
-        assertArrayEquals(golden, Wire.encode(StatsResponsePayload.STREAM_CODEC, response));
+        assertArrayEquals(golden, PayloadBytes.encode(StatsResponsePayload.STREAM_CODEC, response));
         // Records compare their lists element by element, so this also checks the row order
-        assertEquals(response, Wire.decode(StatsResponsePayload.STREAM_CODEC, golden));
+        assertEquals(response, PayloadBytes.decode(StatsResponsePayload.STREAM_CODEC, golden));
         assertEquals("scoreline:stats_response", response.type().id().toString());
     }
 
@@ -63,7 +63,7 @@ public class StatsResponsePayloadTest {
     @ParameterizedTest
     @MethodSource("misalignedRows")
     void t33_t53_t54_responseRejectsMisalignedRows(List<PlayerStats> rows, UUID misaligned) {
-        Throws.withMessage(IllegalArgumentException.class, misaligned.toString(), () -> new StatsResponsePayload(TWO_IDS, rows));
+        ExceptionAssertions.assertThrowsWithMessage(IllegalArgumentException.class, misaligned.toString(), () -> new StatsResponsePayload(TWO_IDS, rows));
     }
 
     /**
@@ -73,13 +73,13 @@ public class StatsResponsePayloadTest {
     void t55_responseDecoderRejectsMisalignedRow() {
         // Written field by field, because the payload's own codec cannot encode a misaligned response
         ByteBuf buffer = Unpooled.buffer();
-        Wire.UNLIMITED_IDS.encode(buffer, TWO_IDS);
+        PayloadBytes.UNLIMITED_IDS.encode(buffer, TWO_IDS);
         ByteBufCodecs.VAR_INT.encode(buffer, 1);
         UUIDUtil.STREAM_CODEC.encode(buffer, A);
         ByteBufCodecs.VAR_LONG.apply(ByteBufCodecs.list()).encode(buffer, List.of(72_000L));
         byte[] oneValueForTwoIds = ByteBufUtil.getBytes(buffer);
 
-        Throws.withMessage(IllegalArgumentException.class, A.toString(), () -> Wire.decode(StatsResponsePayload.STREAM_CODEC, oneValueForTwoIds));
+        ExceptionAssertions.assertThrowsWithMessage(IllegalArgumentException.class, A.toString(), () -> PayloadBytes.decode(StatsResponsePayload.STREAM_CODEC, oneValueForTwoIds));
     }
 
     /**
@@ -103,14 +103,14 @@ public class StatsResponsePayloadTest {
      */
     @Test
     void t60_responseLimitsIdCount() {
-        List<String> atLimit = Wire.distinctIds(Protocol.MAX_STAT_IDS);
-        List<String> overLimit = Wire.distinctIds(Protocol.MAX_STAT_IDS + 1);
+        List<String> atLimit = PayloadBytes.distinctIds(Protocol.MAX_STAT_IDS);
+        List<String> overLimit = PayloadBytes.distinctIds(Protocol.MAX_STAT_IDS + 1);
 
-        assertEquals(new StatsResponsePayload(atLimit, List.of()), Wire.decode(StatsResponsePayload.STREAM_CODEC, idsWithoutRows(atLimit)));
+        assertEquals(new StatsResponsePayload(atLimit, List.of()), PayloadBytes.decode(StatsResponsePayload.STREAM_CODEC, idsWithoutRows(atLimit)));
 
         byte[] tooMany = idsWithoutRows(overLimit);
         // Minecraft's message names the count that broke the limit
-        Throws.withMessage(DecoderException.class, String.valueOf(Protocol.MAX_STAT_IDS + 1), () -> Wire.decode(StatsResponsePayload.STREAM_CODEC, tooMany));
+        ExceptionAssertions.assertThrowsWithMessage(DecoderException.class, String.valueOf(Protocol.MAX_STAT_IDS + 1), () -> PayloadBytes.decode(StatsResponsePayload.STREAM_CODEC, tooMany));
     }
 
     /**
@@ -121,11 +121,11 @@ public class StatsResponsePayloadTest {
         List<String> atLimit = List.of("a".repeat(Protocol.MAX_STAT_ID_LENGTH));
         List<String> overLimit = List.of("a".repeat(Protocol.MAX_STAT_ID_LENGTH + 1));
 
-        assertEquals(new StatsResponsePayload(atLimit, List.of()), Wire.decode(StatsResponsePayload.STREAM_CODEC, idsWithoutRows(atLimit)));
+        assertEquals(new StatsResponsePayload(atLimit, List.of()), PayloadBytes.decode(StatsResponsePayload.STREAM_CODEC, idsWithoutRows(atLimit)));
 
         byte[] tooLong = idsWithoutRows(overLimit);
         // Minecraft's message names the length that broke the limit
-        Throws.withMessage(DecoderException.class, String.valueOf(Protocol.MAX_STAT_ID_LENGTH + 1), () -> Wire.decode(StatsResponsePayload.STREAM_CODEC, tooLong));
+        ExceptionAssertions.assertThrowsWithMessage(DecoderException.class, String.valueOf(Protocol.MAX_STAT_ID_LENGTH + 1), () -> PayloadBytes.decode(StatsResponsePayload.STREAM_CODEC, tooLong));
     }
 
     /**
@@ -133,7 +133,7 @@ public class StatsResponsePayloadTest {
      */
     @Test
     void t64_responseRejectsDuplicateIds() {
-        Throws.withMessage(IllegalArgumentException.class, Protocol.DEATHS, () -> new StatsResponsePayload(List.of(Protocol.DEATHS, Protocol.DEATHS), List.of()));
+        ExceptionAssertions.assertThrowsWithMessage(IllegalArgumentException.class, Protocol.DEATHS, () -> new StatsResponsePayload(List.of(Protocol.DEATHS, Protocol.DEATHS), List.of()));
     }
 
     /**
@@ -141,7 +141,7 @@ public class StatsResponsePayloadTest {
      */
     private static byte[] idsWithoutRows(List<String> statIds) {
         ByteBuf buffer = Unpooled.buffer();
-        Wire.UNLIMITED_IDS.encode(buffer, statIds);
+        PayloadBytes.UNLIMITED_IDS.encode(buffer, statIds);
         ByteBufCodecs.VAR_INT.encode(buffer, 0);
         return ByteBufUtil.getBytes(buffer);
     }

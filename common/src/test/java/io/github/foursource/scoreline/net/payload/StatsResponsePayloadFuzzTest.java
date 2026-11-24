@@ -9,6 +9,6 @@ public class StatsResponsePayloadFuzzTest {
      */
     @FuzzTest(maxDuration = "120s")
     void t112_responseDecoder(byte[] data) {
-        FuzzCheck.decode(StatsResponsePayload.STREAM_CODEC, data);
+        FuzzAssertions.assertDecodesSafely(StatsResponsePayload.STREAM_CODEC, data);
     }
 }

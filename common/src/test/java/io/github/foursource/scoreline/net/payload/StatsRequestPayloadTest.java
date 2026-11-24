@@ -19,8 +19,8 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.resources.Identifier;
 
 public class StatsRequestPayloadTest {
-    /** The request's wire format without its limits, see {@link Wire#UNLIMITED_IDS}. */
-    private static final StreamCodec<ByteBuf, List<String>> UNLIMITED = Wire.UNLIMITED_IDS;
+    /** The request's wire format without its limits, see {@link PayloadBytes#UNLIMITED_IDS}. */
+    private static final StreamCodec<ByteBuf, List<String>> UNLIMITED = PayloadBytes.UNLIMITED_IDS;
 
     /** Minecraft accepts at most this many bytes per payload sent to the server (the type's identifier included). */
     private static final int MAX_SERVERBOUND_BYTES = 32_767;
@@ -31,10 +31,10 @@ public class StatsRequestPayloadTest {
     @Test
     void t29_requestMatchesGoldenV1() throws IOException {
         StatsRequestPayload request = new StatsRequestPayload(List.of(Protocol.PLAY_TIME, Protocol.DEATHS));
-        byte[] golden = Wire.golden(1, "stats_request");
+        byte[] golden = PayloadBytes.readGolden(1, "stats_request");
 
-        assertArrayEquals(golden, Wire.encode(StatsRequestPayload.STREAM_CODEC, request));
-        assertEquals(request, Wire.decode(StatsRequestPayload.STREAM_CODEC, golden));
+        assertArrayEquals(golden, PayloadBytes.encode(StatsRequestPayload.STREAM_CODEC, request));
+        assertEquals(request, PayloadBytes.decode(StatsRequestPayload.STREAM_CODEC, golden));
         assertEquals("scoreline:stats_request", request.type().id().toString());
     }
 
@@ -43,14 +43,14 @@ public class StatsRequestPayloadTest {
      */
     @Test
     void t30_requestLimitsIdCount() {
-        List<String> atLimit = Wire.distinctIds(Protocol.MAX_STAT_IDS);
-        List<String> overLimit = Wire.distinctIds(Protocol.MAX_STAT_IDS + 1);
+        List<String> atLimit = PayloadBytes.distinctIds(Protocol.MAX_STAT_IDS);
+        List<String> overLimit = PayloadBytes.distinctIds(Protocol.MAX_STAT_IDS + 1);
 
-        assertEquals(new StatsRequestPayload(atLimit), Wire.decode(StatsRequestPayload.STREAM_CODEC, Wire.encode(UNLIMITED, atLimit)));
+        assertEquals(new StatsRequestPayload(atLimit), PayloadBytes.decode(StatsRequestPayload.STREAM_CODEC, PayloadBytes.encode(UNLIMITED, atLimit)));
 
-        byte[] tooMany = Wire.encode(UNLIMITED, overLimit);
+        byte[] tooMany = PayloadBytes.encode(UNLIMITED, overLimit);
         // Minecraft's message names the count that broke the limit
-        Throws.withMessage(DecoderException.class, String.valueOf(Protocol.MAX_STAT_IDS + 1), () -> Wire.decode(StatsRequestPayload.STREAM_CODEC, tooMany));
+        ExceptionAssertions.assertThrowsWithMessage(DecoderException.class, String.valueOf(Protocol.MAX_STAT_IDS + 1), () -> PayloadBytes.decode(StatsRequestPayload.STREAM_CODEC, tooMany));
     }
 
     /**
@@ -61,11 +61,11 @@ public class StatsRequestPayloadTest {
         List<String> atLimit = List.of("a".repeat(Protocol.MAX_STAT_ID_LENGTH));
         List<String> overLimit = List.of("a".repeat(Protocol.MAX_STAT_ID_LENGTH + 1));
 
-        assertEquals(new StatsRequestPayload(atLimit), Wire.decode(StatsRequestPayload.STREAM_CODEC, Wire.encode(UNLIMITED, atLimit)));
+        assertEquals(new StatsRequestPayload(atLimit), PayloadBytes.decode(StatsRequestPayload.STREAM_CODEC, PayloadBytes.encode(UNLIMITED, atLimit)));
 
-        byte[] tooLong = Wire.encode(UNLIMITED, overLimit);
+        byte[] tooLong = PayloadBytes.encode(UNLIMITED, overLimit);
         // Minecraft's message names the length that broke the limit
-        Throws.withMessage(DecoderException.class, String.valueOf(Protocol.MAX_STAT_ID_LENGTH + 1), () -> Wire.decode(StatsRequestPayload.STREAM_CODEC, tooLong));
+        ExceptionAssertions.assertThrowsWithMessage(DecoderException.class, String.valueOf(Protocol.MAX_STAT_ID_LENGTH + 1), () -> PayloadBytes.decode(StatsRequestPayload.STREAM_CODEC, tooLong));
     }
 
     /**
@@ -89,11 +89,11 @@ public class StatsRequestPayloadTest {
     void t63_requestRejectsDuplicateIds() {
         List<String> duplicates = List.of(Protocol.DEATHS, Protocol.DEATHS);
 
-        Throws.withMessage(IllegalArgumentException.class, Protocol.DEATHS, () -> new StatsRequestPayload(duplicates));
+        ExceptionAssertions.assertThrowsWithMessage(IllegalArgumentException.class, Protocol.DEATHS, () -> new StatsRequestPayload(duplicates));
 
         // The decoder builds the payload through the constructor, so duplicates on the wire fail too
-        byte[] onTheWire = Wire.encode(UNLIMITED, duplicates);
-        Throws.withMessage(IllegalArgumentException.class, Protocol.DEATHS, () -> Wire.decode(StatsRequestPayload.STREAM_CODEC, onTheWire));
+        byte[] onTheWire = PayloadBytes.encode(UNLIMITED, duplicates);
+        ExceptionAssertions.assertThrowsWithMessage(IllegalArgumentException.class, Protocol.DEATHS, () -> PayloadBytes.decode(StatsRequestPayload.STREAM_CODEC, onTheWire));
     }
 
     /**
@@ -108,11 +108,11 @@ public class StatsRequestPayloadTest {
         }
         StatsRequestPayload request = new StatsRequestPayload(largest);
 
-        int bytes = Wire.encode(Identifier.STREAM_CODEC, request.type().id()).length + Wire.encode(StatsRequestPayload.STREAM_CODEC, request).length;
+        int bytes = PayloadBytes.encode(Identifier.STREAM_CODEC, request.type().id()).length + PayloadBytes.encode(StatsRequestPayload.STREAM_CODEC, request).length;
 
         assertTrue(bytes < MAX_SERVERBOUND_BYTES, bytes + " bytes");
         // The decoder accepts it: it is legal
-        assertEquals(request, Wire.decode(StatsRequestPayload.STREAM_CODEC, Wire.encode(StatsRequestPayload.STREAM_CODEC, request)));
+        assertEquals(request, PayloadBytes.decode(StatsRequestPayload.STREAM_CODEC, PayloadBytes.encode(StatsRequestPayload.STREAM_CODEC, request)));
     }
 
     /**
@@ -124,6 +124,6 @@ public class StatsRequestPayloadTest {
         byte[] bytes = { (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, 0x07 };
 
         assertTimeoutPreemptively(Duration.ofMillis(100),
-                () -> Throws.withMessage(DecoderException.class, String.valueOf(Integer.MAX_VALUE), () -> Wire.decode(StatsRequestPayload.STREAM_CODEC, bytes)));
+                () -> ExceptionAssertions.assertThrowsWithMessage(DecoderException.class, String.valueOf(Integer.MAX_VALUE), () -> PayloadBytes.decode(StatsRequestPayload.STREAM_CODEC, bytes)));
     }
 }

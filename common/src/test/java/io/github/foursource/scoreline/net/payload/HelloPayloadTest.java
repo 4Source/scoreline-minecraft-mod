@@ -18,12 +18,12 @@ public class HelloPayloadTest {
     @Test
     void t27_helloMatchesGoldenV1() throws IOException {
         HelloPayload hello = new HelloPayload(1, 2);
-        byte[] golden = Wire.golden(1, "hello");
+        byte[] golden = PayloadBytes.readGolden(1, "hello");
 
         // The encoder writes exactly the stored bytes ...
-        assertArrayEquals(golden, Wire.encode(HelloPayload.STREAM_CODEC, hello));
+        assertArrayEquals(golden, PayloadBytes.encode(HelloPayload.STREAM_CODEC, hello));
         // ... and the stored bytes decode back to the same message
-        assertEquals(hello, Wire.decode(HelloPayload.STREAM_CODEC, golden));
+        assertEquals(hello, PayloadBytes.decode(HelloPayload.STREAM_CODEC, golden));
         // Compared with a literal, so a typo in the TYPE constant is caught too
         assertEquals("scoreline:hello", hello.type().id().toString());
     }
@@ -34,7 +34,7 @@ public class HelloPayloadTest {
     @Test
     void t28_helloSkipsUnknownTrailingBytes() throws IOException {
         // A v1 hello followed by fields a newer server might append
-        ByteBuf buffer = Unpooled.wrappedBuffer(Wire.golden(1, "hello"), new byte[] { 7, 8, 9 });
+        ByteBuf buffer = Unpooled.wrappedBuffer(PayloadBytes.readGolden(1, "hello"), new byte[] { 7, 8, 9 });
 
         assertEquals(new HelloPayload(1, 2), HelloPayload.STREAM_CODEC.decode(buffer));
         // Minecraft drops the connection if a payload is not read to the end
@@ -51,8 +51,8 @@ public class HelloPayloadTest {
         // 300 = 0b10_0101100 → 0x2C | 0x80, then 0x02. 200 = 0b1_1001000 → 0x48 | 0x80, then 0x01.
         byte[] expected = { (byte) (0x2C | 0x80), 0x02, (byte) (0x48 | 0x80), 0x01 };
 
-        assertArrayEquals(expected, Wire.encode(HelloPayload.STREAM_CODEC, hello));
-        assertEquals(hello, Wire.decode(HelloPayload.STREAM_CODEC, expected));
+        assertArrayEquals(expected, PayloadBytes.encode(HelloPayload.STREAM_CODEC, hello));
+        assertEquals(hello, PayloadBytes.decode(HelloPayload.STREAM_CODEC, expected));
     }
 
     /**
