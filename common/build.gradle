@@ -83,8 +83,6 @@ tasks.named('test') {
 // List single files only, never packages or name wildcards, so a new file is measured until someone decides otherwise.
 // Each entry says why unit tests cannot run the class. Paths are relative to the class output folder, without ".class".
 def coverageExcludes = [
-    // TODO: Gets the game passed in, but has no unit tests yet; the game tests run it
-    'io/github/foursource/scoreline/client/ScorelineClient',
 ]
 
 // All compiled classes of main. A FileTree is lazy: Gradle evaluates it only when a task runs,
