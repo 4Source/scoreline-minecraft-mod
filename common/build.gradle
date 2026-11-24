@@ -87,12 +87,6 @@ def coverageExcludes = [
     'io/github/foursource/scoreline/client/ScorelineClient',
     // TODO: Gets the game passed in, but has no unit tests yet; the game tests run it
     'io/github/foursource/scoreline/server/ScorelineServer',
-    // Loads the loader's implementations through ServiceLoader when the class loads; common's tests have none
-    'io/github/foursource/scoreline/platform/Services',
-    // Its default method getEnvironmentName counts as code; it only formats an answer of the loader
-    'io/github/foursource/scoreline/platform/services/IPlatformHelper',
-    // Start-up and logging only
-    'io/github/foursource/scoreline/ScorelineCommon',
 ]
 
 // All compiled classes of main. A FileTree is lazy: Gradle evaluates it only when a task runs,

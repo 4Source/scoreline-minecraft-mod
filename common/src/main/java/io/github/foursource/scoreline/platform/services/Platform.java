@@ -3,22 +3,14 @@ package io.github.foursource.scoreline.platform.services;
 /**
  * Loader-specific behavior that common code needs. Each loader implements it; {@link io.github.foursource.scoreline.platform.Services#PLATFORM} holds the instance.
  */
-public interface IPlatformHelper {
+public interface Platform {
 
     /**
      * Gets the name of the current platform
      *
      * @return The name of the current platform.
      */
-    String getPlatformName();
-
-    /**
-     * Checks if a mod with the given id is loaded.
-     *
-     * @param modId The mod to check if it is loaded.
-     * @return True if the mod is loaded, false otherwise.
-     */
-    boolean isModLoaded(String modId);
+    String getName();
 
     /**
      * Check if the game is currently in a development environment.

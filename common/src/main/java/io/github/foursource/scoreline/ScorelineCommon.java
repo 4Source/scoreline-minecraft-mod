@@ -39,6 +39,6 @@ public final class ScorelineCommon {
     public static void init(String modVersion) {
         // The smoke run and the build workflow search the log for exactly this line.
         LOG.info("{} {} loaded", Constants.MOD_NAME, modVersion);
-        LOG.info("Running at {} in a {} environment", Services.PLATFORM.getPlatformName(), Services.PLATFORM.getEnvironmentName());
+        LOG.info("Running at {} in a {} environment", Services.PLATFORM.getName(), Services.PLATFORM.getEnvironmentName());
     }
 }

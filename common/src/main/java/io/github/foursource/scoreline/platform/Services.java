@@ -1,7 +1,7 @@
 package io.github.foursource.scoreline.platform;
 
 import io.github.foursource.scoreline.ScorelineCommon;
-import io.github.foursource.scoreline.platform.services.IPlatformHelper;
+import io.github.foursource.scoreline.platform.services.Platform;
 
 import java.util.ServiceLoader;
 
@@ -14,9 +14,9 @@ import java.util.ServiceLoader;
 public final class Services {
 
     /**
-     * The current loader's platform helper.
+     * The current loader's {@link Platform}.
      */
-    public static final IPlatformHelper PLATFORM = load(IPlatformHelper.class);
+    public static final Platform PLATFORM = load(Platform.class);
 
     private Services() {}
 
