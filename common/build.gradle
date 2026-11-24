@@ -81,9 +81,10 @@ tasks.named('test') {
 
 // Coverage gate: every class of main is measured, except the files listed here.
 // List single files only, never packages or name wildcards, so a new file is measured until someone decides otherwise.
-// Each entry says why unit tests cannot run the class. Paths are relative to the class output folder, without ".class".
-def coverageExcludes = [
-]
+// An entry is drawing code or code that cannot exist without a running game; code that only reaches the game through
+// Services or a singleton gets the game passed in instead. Each entry says why unit tests cannot run the class.
+// Paths are relative to the class output folder, without ".class".
+def coverageExcludes = []
 
 // All compiled classes of main. A FileTree is lazy: Gradle evaluates it only when a task runs,
 // after compileJava has produced the classes.

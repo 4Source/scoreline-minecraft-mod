@@ -44,7 +44,7 @@ neoForge {
             sourceSet = sourceSets.gametest
             programArguments.addAll '--tests', 'scoreline:*'
         }
-        // // The manual profiling run: only LoadTest is registered, 50 mock players asking for 30 s. Java Flight
+        // The manual profiling run: only LoadTest is registered, 50 mock players asking for 30 s. Java Flight
         // Recorder's method timing (Java 25) counts and times the calls of Scoreline's server-side classes without any code in
         // the mod; the table is printed when the server exits, and build/perf/profile.jfr opens in Java Mission Control.
         // Started by hand, never in a check.
@@ -54,7 +54,7 @@ neoForge {
             sourceSet = sourceSets.gametest
             systemProperty 'scoreline.loadTest', 'true'
             programArguments.addAll '--tests', 'scoreline:t108_load_50_players'
-            def timed = ['server.ScorelineServer', 'net.RequestGate', 'net.RequestBudget'].collect { "${project.group}.${mod_id}.${it}" }.join(';')
+            def timed = ['server.ScorelineServer', 'platform.NeoForgeGameServer', 'net.RequestGate', 'net.RequestBudget'].collect { "${project.group}.${mod_id}.${it}" }.join(';')
             jvmArgument "-XX:StartFlightRecording=filename=${this.file('build/perf/profile.jfr').absolutePath},method-timing=${timed},report-on-exit=method-timing,dumponexit=true"
         }
     }
@@ -112,8 +112,8 @@ sourceSets.configureEach {
     }
 }
 
-// Coverage of the game-test run, a report only, never a gate: ScorelineServer and the loader glue are outside
-// common's coverage gate, and this shows which of their lines the game tests reach. JaCoCo's agent records the
+// Coverage of the game-test run, a report only, never a gate: the loader glue is outside common's coverage gate,
+// and this shows which of its lines, and of common's code, the game tests reach. JaCoCo's agent records the
 // run into build/jacoco/gameTest.exec; the report matches the classes by their bytes, which ModLauncher loads unchanged.
 apply plugin: 'jacoco'
 def gameTestExec = layout.buildDirectory.file('jacoco/gameTest.exec')
